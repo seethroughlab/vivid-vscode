@@ -5,8 +5,8 @@ import * as os from 'os';
 import * as https from 'https';
 import { execSync, spawn } from 'child_process';
 
-// GitHub repository info
-const GITHUB_OWNER = 'jeff';  // TODO: Update to actual owner
+// GitHub repository info for vivid runtime
+const GITHUB_OWNER = 'seethroughlab';
 const GITHUB_REPO = 'vivid';
 
 interface ReleaseAsset {

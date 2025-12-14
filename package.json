@@ -6,7 +6,7 @@
   "publisher": "seethroughlab",
   "repository": {
     "type": "git",
-    "url": "https://github.com/seethroughlab/vivid"
+    "url": "https://github.com/seethroughlab/vivid-vscode"
   },
   "license": "MIT",
   "engines": {
