@@ -38,6 +38,16 @@ export class RuntimeManager {
     }
 
     /**
+     * Get the platform target string (matches release artifact names)
+     */
+    private get platformTarget(): string {
+        const platform = process.platform === 'darwin' ? 'darwin' :
+                        process.platform === 'win32' ? 'win32' : 'linux';
+        const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+        return `${platform}-${arch}`;
+    }
+
+    /**
      * Get the path to the vivid executable
      */
     get executablePath(): string {
@@ -230,29 +240,68 @@ export class RuntimeManager {
      */
     private async extractArchive(archivePath: string): Promise<void> {
         const isZip = archivePath.endsWith('.zip');
+        const tempExtractDir = path.join(os.tmpdir(), 'vivid-extract');
+
+        // Clean up any previous extraction
+        if (fs.existsSync(tempExtractDir)) {
+            fs.rmSync(tempExtractDir, { recursive: true });
+        }
+        fs.mkdirSync(tempExtractDir, { recursive: true });
 
         // Ensure install directory exists
         if (!fs.existsSync(this.installDir)) {
             fs.mkdirSync(this.installDir, { recursive: true });
         }
 
+        // Extract to temp directory first
         if (isZip) {
-            // Use PowerShell on Windows
             if (process.platform === 'win32') {
                 execSync(
-                    `powershell -command "Expand-Archive -Force -Path '${archivePath}' -DestinationPath '${this.installDir}'"`,
+                    `powershell -command "Expand-Archive -Force -Path '${archivePath}' -DestinationPath '${tempExtractDir}'"`,
                     { stdio: 'pipe' }
                 );
             } else {
-                execSync(`unzip -o "${archivePath}" -d "${this.installDir}"`, { stdio: 'pipe' });
+                execSync(`unzip -o "${archivePath}" -d "${tempExtractDir}"`, { stdio: 'pipe' });
             }
         } else {
-            // tar.gz
-            execSync(`tar -xzf "${archivePath}" -C "${this.installDir}" --strip-components=1`, { stdio: 'pipe' });
+            execSync(`tar -xzf "${archivePath}" -C "${tempExtractDir}"`, { stdio: 'pipe' });
         }
 
+        // Find the extracted folder (should be vivid-{platform}-{arch})
+        const extractedItems = fs.readdirSync(tempExtractDir);
+        const vividFolder = extractedItems.find(item =>
+            item.startsWith('vivid-') && fs.statSync(path.join(tempExtractDir, item)).isDirectory()
+        );
+
+        if (!vividFolder) {
+            throw new Error('Invalid archive structure: expected vivid-{platform}-{arch} folder');
+        }
+
+        const sourceDir = path.join(tempExtractDir, vividFolder);
+
+        // Copy contents to install directory
+        const copyRecursive = (src: string, dest: string) => {
+            if (!fs.existsSync(dest)) {
+                fs.mkdirSync(dest, { recursive: true });
+            }
+            for (const item of fs.readdirSync(src)) {
+                const srcPath = path.join(src, item);
+                const destPath = path.join(dest, item);
+                if (fs.statSync(srcPath).isDirectory()) {
+                    copyRecursive(srcPath, destPath);
+                } else {
+                    fs.copyFileSync(srcPath, destPath);
+                }
+            }
+        };
+
+        copyRecursive(sourceDir, this.installDir);
+
+        // Clean up temp directory
+        fs.rmSync(tempExtractDir, { recursive: true });
+
         // Make executable on Unix
-        if (process.platform !== 'win32') {
+        if (process.platform !== 'win32' && fs.existsSync(this.executablePath)) {
             fs.chmodSync(this.executablePath, 0o755);
         }
     }
