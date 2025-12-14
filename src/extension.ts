@@ -6,8 +6,12 @@ import { OperatorTreeProvider, ParamData, OperatorData } from './operatorTreeVie
 import { PerformancePanelProvider } from './performancePanel';
 import { NodeInspectorPanel } from './nodeInspectorPanel';
 import { ChainCodeSync } from './chainCodeSync';
+import { RuntimeManager } from './runtimeManager';
+import { ChildProcess } from 'child_process';
 
 let runtimeClient: RuntimeClient | undefined;
+let runtimeManager: RuntimeManager | undefined;
+let runtimeProcess: ChildProcess | undefined;
 let decorationManager: DecorationManager | undefined;
 let statusBar: StatusBar | undefined;
 let operatorTreeProvider: OperatorTreeProvider | undefined;
@@ -24,6 +28,9 @@ let currentParams: ParamData[] = [];
 export function activate(context: vscode.ExtensionContext) {
     outputChannel = vscode.window.createOutputChannel('Vivid');
     outputChannel.appendLine('Vivid extension activated');
+
+    // Initialize runtime manager for download-on-demand
+    runtimeManager = new RuntimeManager(outputChannel);
 
     // Create diagnostic collection for compile errors
     diagnosticCollection = vscode.languages.createDiagnosticCollection('vivid');
@@ -123,7 +130,9 @@ export function activate(context: vscode.ExtensionContext) {
         }),
         vscode.commands.registerCommand('vivid.soloOperator', soloOperator),
         vscode.commands.registerCommand('vivid.exitSolo', exitSolo),
-        vscode.commands.registerCommand('vivid.inspectOperator', inspectOperator)
+        vscode.commands.registerCommand('vivid.inspectOperator', inspectOperator),
+        vscode.commands.registerCommand('vivid.checkForUpdates', () => runtimeManager?.checkForUpdates()),
+        vscode.commands.registerCommand('vivid.reinstallRuntime', () => runtimeManager?.installOrUpdate(true))
     );
 
     // Watch for editor changes
@@ -185,6 +194,14 @@ export function activate(context: vscode.ExtensionContext) {
                 connectToRuntime();
             }
         });
+    }
+
+    // Check for updates on startup if enabled
+    if (config.get<boolean>('checkUpdatesOnStart') && runtimeManager?.isInstalled()) {
+        // Delay the check slightly to not slow down activation
+        setTimeout(() => {
+            runtimeManager?.checkForUpdates();
+        }, 5000);
     }
 
     context.subscriptions.push(outputChannel, statusBar);
@@ -373,16 +390,9 @@ function showCompileErrors(message: string) {
 }
 
 async function startRuntime(context: vscode.ExtensionContext) {
-    const config = vscode.workspace.getConfiguration('vivid');
-    let runtimePath = config.get<string>('runtimePath');
-
-    if (!runtimePath) {
-        runtimePath = await vscode.window.showInputBox({
-            prompt: 'Path to vivid executable',
-            placeHolder: '/path/to/vivid'
-        });
-        if (!runtimePath) return;
-        await config.update('runtimePath', runtimePath, vscode.ConfigurationTarget.Global);
+    if (!runtimeManager) {
+        vscode.window.showErrorMessage('Runtime manager not initialized');
+        return;
     }
 
     const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -391,14 +401,58 @@ async function startRuntime(context: vscode.ExtensionContext) {
         return;
     }
 
-    // Derive vivid root from runtime path (runtime is at vivid/build/bin/vivid)
-    const vividRoot = runtimePath.replace(/\/build\/bin\/vivid$/, '');
+    // Check for custom runtime path (for development/manual installs)
+    const config = vscode.workspace.getConfiguration('vivid');
+    const customPath = config.get<string>('runtimePath');
 
-    const terminal = vscode.window.createTerminal('Vivid Runtime');
-    terminal.show();
-    terminal.sendText(`cd "${vividRoot}" && "${runtimePath}" "${workspaceFolders[0].uri.fsPath}"`);
+    if (customPath) {
+        // Use custom path
+        outputChannel.appendLine(`Using custom runtime path: ${customPath}`);
+        const terminal = vscode.window.createTerminal('Vivid Runtime');
+        terminal.show();
+        terminal.sendText(`"${customPath}" "${workspaceFolders[0].uri.fsPath}"`);
+        setTimeout(() => connectToRuntime(), 2000);
+        return;
+    }
 
-    outputChannel.appendLine(`Starting runtime: ${runtimePath}`);
+    // Ensure runtime is installed (download if needed)
+    const installed = await runtimeManager.ensureInstalled();
+    if (!installed) {
+        return;
+    }
+
+    // Stop existing runtime if running
+    if (runtimeProcess) {
+        runtimeProcess.kill();
+        runtimeProcess = undefined;
+    }
+
+    // Find the chain.cpp to determine project path
+    const projectPath = workspaceFolders[0].uri.fsPath;
+
+    // Spawn vivid process
+    runtimeProcess = runtimeManager.spawnVivid(projectPath);
+
+    runtimeProcess.stdout?.on('data', (data) => {
+        outputChannel.append(data.toString());
+    });
+
+    runtimeProcess.stderr?.on('data', (data) => {
+        outputChannel.append(data.toString());
+    });
+
+    runtimeProcess.on('close', (code) => {
+        outputChannel.appendLine(`Vivid process exited with code ${code}`);
+        runtimeProcess = undefined;
+        statusBar?.setConnected(false);
+    });
+
+    runtimeProcess.on('error', (err) => {
+        outputChannel.appendLine(`Failed to start vivid: ${err.message}`);
+        vscode.window.showErrorMessage(`Failed to start vivid: ${err.message}`);
+    });
+
+    outputChannel.appendLine(`Starting runtime: ${runtimeManager.executablePath}`);
 
     // Wait for runtime to start, then connect
     setTimeout(() => connectToRuntime(), 2000);
@@ -408,6 +462,10 @@ function stopRuntime() {
     if (runtimeClient) {
         runtimeClient.disconnect();
         runtimeClient = undefined;
+    }
+    if (runtimeProcess) {
+        runtimeProcess.kill();
+        runtimeProcess = undefined;
     }
     statusBar?.setConnected(false);
 }

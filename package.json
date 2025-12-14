@@ -90,6 +90,14 @@
         "command": "vivid.exitSolo",
         "title": "Vivid: Exit Solo Mode",
         "icon": "$(eye-closed)"
+      },
+      {
+        "command": "vivid.checkForUpdates",
+        "title": "Vivid: Check for Updates"
+      },
+      {
+        "command": "vivid.reinstallRuntime",
+        "title": "Vivid: Reinstall Runtime"
       }
     ],
     "menus": {
@@ -129,7 +137,7 @@
         "vivid.runtimePath": {
           "type": "string",
           "default": "",
-          "description": "Path to vivid executable"
+          "description": "Custom path to vivid executable (leave empty to use auto-downloaded version)"
         },
         "vivid.websocketPort": {
           "type": "number",
@@ -150,6 +158,11 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically connect to runtime when opening a Vivid project"
+        },
+        "vivid.checkUpdatesOnStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check for runtime updates when the extension starts"
         }
       }
     },
