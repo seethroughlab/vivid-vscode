@@ -14,10 +14,7 @@
   },
   "categories": ["Visualization", "Other"],
   "activationEvents": [
-    "workspaceContains:**/chain.cpp",
-    "onLanguage:cpp",
-    "onView:vividOperators",
-    "onCommand:vivid.createProject"
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -184,7 +181,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
-    "package": "vsce package --no-dependencies",
+    "package": "vsce package",
     "publish": "vsce publish"
   },
   "devDependencies": {

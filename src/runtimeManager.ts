@@ -304,6 +304,43 @@ export class RuntimeManager {
         if (process.platform !== 'win32' && fs.existsSync(this.executablePath)) {
             fs.chmodSync(this.executablePath, 0o755);
         }
+
+        // Fix rpath on macOS (the build process hardcodes the CI build path)
+        if (process.platform === 'darwin') {
+            this.fixMacOSRpath();
+        }
+    }
+
+    /**
+     * Fix the rpath in macOS binaries to use @executable_path/../lib
+     * The CI build hardcodes /Users/runner/work/... which doesn't exist locally
+     */
+    private fixMacOSRpath(): void {
+        const correctRpath = '@executable_path/../lib';
+
+        try {
+            // Get current rpath
+            const result = execSync(`otool -l "${this.executablePath}" | grep -A2 LC_RPATH | grep path || true`, {
+                encoding: 'utf8',
+                stdio: ['pipe', 'pipe', 'pipe']
+            });
+
+            // Extract the old rpath path
+            const match = result.match(/path\s+(.+?)\s+\(/);
+            if (match && match[1] && match[1] !== correctRpath) {
+                const oldRpath = match[1];
+                this.outputChannel.appendLine(`Fixing rpath: ${oldRpath} -> ${correctRpath}`);
+
+                // Remove old rpath and add correct one
+                execSync(`install_name_tool -delete_rpath "${oldRpath}" "${this.executablePath}"`, { stdio: 'pipe' });
+                execSync(`install_name_tool -add_rpath "${correctRpath}" "${this.executablePath}"`, { stdio: 'pipe' });
+
+                this.outputChannel.appendLine('Rpath fixed successfully');
+            }
+        } catch (e) {
+            // Log but don't fail - DYLD_LIBRARY_PATH fallback should still work
+            this.outputChannel.appendLine(`Warning: Could not fix rpath: ${e}`);
+        }
     }
 
     /**
@@ -426,7 +463,40 @@ export class RuntimeManager {
     }
 
     /**
+     * Parse a semver version string (e.g., "v0.1.0" or "0.1.0") into components
+     */
+    private parseVersion(version: string): { major: number; minor: number; patch: number } | null {
+        const match = version.replace(/^v/, '').match(/^(\d+)\.(\d+)\.(\d+)/);
+        if (!match) {
+            return null;
+        }
+        return {
+            major: parseInt(match[1], 10),
+            minor: parseInt(match[2], 10),
+            patch: parseInt(match[3], 10)
+        };
+    }
+
+    /**
+     * Check if an update is a minor/patch update (safe to auto-install)
+     */
+    private isMinorOrPatchUpdate(installed: string, latest: string): boolean {
+        const installedVer = this.parseVersion(installed);
+        const latestVer = this.parseVersion(latest);
+
+        if (!installedVer || !latestVer) {
+            return false;
+        }
+
+        // Same major version = safe to auto-update
+        return latestVer.major === installedVer.major &&
+               (latestVer.minor > installedVer.minor ||
+                (latestVer.minor === installedVer.minor && latestVer.patch > installedVer.patch));
+    }
+
+    /**
      * Check for updates (called periodically or on command)
+     * Auto-installs minor/patch updates, prompts for major updates
      */
     async checkForUpdates(): Promise<void> {
         if (!this.isInstalled()) {
@@ -438,14 +508,22 @@ export class RuntimeManager {
             const installed = this.getInstalledVersion();
 
             if (installed && installed.version !== release.tag_name) {
-                const choice = await vscode.window.showInformationMessage(
-                    `Vivid ${release.tag_name} is available (installed: ${installed.version})`,
-                    'Update',
-                    'Later'
-                );
-
-                if (choice === 'Update') {
+                if (this.isMinorOrPatchUpdate(installed.version, release.tag_name)) {
+                    // Auto-install minor/patch updates
+                    this.outputChannel.appendLine(`Auto-updating to ${release.tag_name} (from ${installed.version})`);
+                    vscode.window.showInformationMessage(`Vivid: Auto-updating to ${release.tag_name}...`);
                     await this.installOrUpdate(true);
+                } else {
+                    // Prompt for major version updates
+                    const choice = await vscode.window.showInformationMessage(
+                        `Vivid ${release.tag_name} is available (installed: ${installed.version}). This is a major update.`,
+                        'Update',
+                        'Later'
+                    );
+
+                    if (choice === 'Update') {
+                        await this.installOrUpdate(true);
+                    }
                 }
             }
         } catch (e) {
