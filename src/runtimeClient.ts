@@ -149,7 +149,7 @@ export class RuntimeClient {
             const msg: RuntimeMessage = JSON.parse(data);
 
             // Log message types (except high-frequency ones)
-            if (msg.type !== 'node_update' && msg.type !== 'performance_stats') {
+            if (msg.type !== 'node_update' && msg.type !== 'performance_stats' && msg.type !== 'param_values') {
                 this.outputChannel.appendLine(`WebSocket received: ${msg.type}`);
             }
 

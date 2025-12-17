@@ -1,0 +1,45 @@
+# Source files (bundled into out/extension.js)
+src/**
+**/*.ts
+!**/*.d.ts
+tsconfig.json
+
+# Development files
+.github/**
+.vscode/**
+.git/**
+.gitignore
+
+# Node modules (most bundled into extension.js, except web-tree-sitter which has WASM issues)
+node_modules/**
+!node_modules/web-tree-sitter/**
+
+# Test files
+**/*.test.js
+**/*.test.ts
+test/**
+tests/**
+
+# Build artifacts and temp files
+*.vsix
+.DS_Store
+**/.DS_Store
+npm-debug.log
+yarn-error.log
+
+# Documentation
+*.md
+!README.md
+!CHANGELOG.md
+
+# Config files
+.eslintrc*
+.prettierrc*
+eslint.config.*
+
+# Plan files
+.claude/**
+
+# Intermediate build files (keep only bundled output)
+out/**/*.js.map
+out/mcp/

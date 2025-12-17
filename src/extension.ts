@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as path from 'path';
+import * as http from 'http';
 import { RuntimeClient, NodeUpdate, SoloState } from './runtimeClient';
 import { DecorationManager } from './decorations';
 import { StatusBar } from './statusBar';
@@ -9,10 +11,12 @@ import { NodeInspectorPanel } from './nodeInspectorPanel';
 import { ChainCodeSync } from './chainCodeSync';
 import { RuntimeManager } from './runtimeManager';
 import { ChildProcess, spawn } from 'child_process';
+import { checkAndPromptMcpConfiguration } from './mcpConfigChecker';
 
 let runtimeClient: RuntimeClient | undefined;
 let runtimeManager: RuntimeManager | undefined;
 let runtimeProcess: ChildProcess | undefined;
+let hookServer: http.Server | undefined;
 let decorationManager: DecorationManager | undefined;
 let statusBar: StatusBar | undefined;
 let operatorTreeProvider: OperatorTreeProvider | undefined;
@@ -32,6 +36,9 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Initialize runtime manager for download-on-demand
     runtimeManager = new RuntimeManager(outputChannel);
+    runtimeManager.setExtensionPath(context.extensionPath);
+    // Install MCP server (if not already installed or needs update)
+    runtimeManager.installMcpServer();
 
     // Create diagnostic collection for compile errors
     diagnosticCollection = vscode.languages.createDiagnosticCollection('vivid');
@@ -64,8 +71,10 @@ export function activate(context: vscode.ExtensionContext) {
         )
     );
 
-    // Initialize chain code sync
+    // Initialize chain code sync with extension path for Tree-sitter
     chainCodeSync = new ChainCodeSync();
+    chainCodeSync.setExtensionPath(context.extensionPath);
+    chainCodeSync.setOutputChannel(outputChannel);
 
     // Wire up inspector callbacks
     nodeInspectorPanel.onParamChange((operator, param, value) => {
@@ -137,7 +146,27 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('vivid.inspectOperator', inspectOperator),
         vscode.commands.registerCommand('vivid.checkForUpdates', () => runtimeManager?.checkForUpdates()),
         vscode.commands.registerCommand('vivid.reinstallRuntime', () => runtimeManager?.installOrUpdate(true)),
-        vscode.commands.registerCommand('vivid.createProject', () => createProject(context))
+        vscode.commands.registerCommand('vivid.createProject', () => createProject(context)),
+        vscode.commands.registerCommand('vivid.configureMcp', async () => {
+            const { configureVividMcp, getMcpDocsPath } = await import('./mcpConfigChecker');
+            const { installVividHook } = await import('./hookInstaller');
+
+            const mcpSuccess = await configureVividMcp();
+            const hookSuccess = await installVividHook();
+
+            if (mcpSuccess && hookSuccess) {
+                const docsPath = getMcpDocsPath();
+                vscode.window.showInformationMessage(
+                    `Vivid MCP and pre-edit hook configured. Docs path: ${docsPath}. Restart Claude Code to apply.`
+                );
+            } else if (mcpSuccess) {
+                vscode.window.showWarningMessage(
+                    'Vivid MCP configured but hook installation failed. Pre-edit warnings may not work.'
+                );
+            } else {
+                vscode.window.showErrorMessage('Failed to configure Vivid MCP server.');
+            }
+        })
     );
 
     // Watch for editor changes
@@ -148,6 +177,114 @@ export function activate(context: vscode.ExtensionContext) {
             }
         })
     );
+
+    // Watch for changes to chain.cpp to invalidate cached locations
+    // This prevents conflicts when external tools (like Claude CLI) edit the file
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeTextDocument(event => {
+            if (event.document.fileName.endsWith('chain.cpp')) {
+                chainCodeSync?.onDocumentChanged();
+            }
+        })
+    );
+
+    // Clear pending change decorations when chain.cpp is saved
+    context.subscriptions.push(
+        vscode.workspace.onDidSaveTextDocument(document => {
+            if (document.fileName.endsWith('chain.cpp')) {
+                chainCodeSync?.clearPendingDecorations();
+            }
+        })
+    );
+
+    // Watch for external file changes (e.g., Claude Code edits)
+    // Prompt user to reload if the file has unsaved changes
+    const chainFileWatcher = vscode.workspace.createFileSystemWatcher('**/chain.cpp');
+    chainFileWatcher.onDidChange(async (uri) => {
+        const document = vscode.workspace.textDocuments.find(
+            doc => doc.uri.fsPath === uri.fsPath
+        );
+
+        if (document && document.isDirty) {
+            const choice = await vscode.window.showWarningMessage(
+                `"${path.basename(uri.fsPath)}" was modified externally. Reload to see changes?`,
+                'Reload',
+                'Ignore'
+            );
+
+            if (choice === 'Reload') {
+                await vscode.commands.executeCommand('workbench.action.files.revert', uri);
+            }
+        }
+    });
+    context.subscriptions.push(chainFileWatcher);
+
+    // HTTP server for Claude Code hook integration
+    // Allows pre-edit hooks to check if chain.cpp has unsaved changes
+    const HOOK_SERVER_PORT = 9877;
+    hookServer = http.createServer(async (req, res) => {
+        // Only handle POST /prepare-for-edit
+        if (req.method === 'POST' && req.url === '/prepare-for-edit') {
+            let body = '';
+            req.on('data', chunk => body += chunk);
+            req.on('end', async () => {
+                try {
+                    const { file_path } = JSON.parse(body || '{}');
+
+                    // Find dirty chain.cpp documents
+                    const dirtyChainDoc = vscode.workspace.textDocuments.find(
+                        doc => doc.fileName.endsWith('chain.cpp') && doc.isDirty
+                    );
+
+                    // If editing chain.cpp and it has unsaved changes, prompt user
+                    if (dirtyChainDoc && file_path && file_path.endsWith('chain.cpp')) {
+                        const choice = await vscode.window.showWarningMessage(
+                            'chain.cpp has unsaved slider changes. What would you like to do before Claude edits?',
+                            'Save Changes',
+                            'Discard Changes',
+                            'Cancel Edit'
+                        );
+
+                        if (choice === 'Save Changes') {
+                            await dirtyChainDoc.save();
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ action: 'proceed' }));
+                        } else if (choice === 'Discard Changes') {
+                            await vscode.commands.executeCommand('workbench.action.files.revert', dirtyChainDoc.uri);
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ action: 'proceed' }));
+                        } else {
+                            // Cancel or dismissed
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ action: 'cancel' }));
+                        }
+                    } else {
+                        // No unsaved changes or not editing chain.cpp
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ action: 'proceed' }));
+                    }
+                } catch {
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ action: 'proceed' }));
+                }
+            });
+        } else {
+            res.writeHead(404);
+            res.end('Not Found');
+        }
+    });
+
+    hookServer.listen(HOOK_SERVER_PORT, '127.0.0.1', () => {
+        outputChannel.appendLine(`Hook server listening on http://127.0.0.1:${HOOK_SERVER_PORT}`);
+    });
+
+    hookServer.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE') {
+            outputChannel.appendLine(`Hook server port ${HOOK_SERVER_PORT} already in use (another VS Code window?)`);
+        } else {
+            outputChannel.appendLine(`Hook server error: ${err.message}`);
+        }
+    });
 
     // Cursor tracking: auto-select operator at cursor position
     // Also sends "focused_node" for 3x larger preview in runtime
@@ -212,8 +349,12 @@ export function activate(context: vscode.ExtensionContext) {
         setTimeout(() => startRuntime(context), 1000);
     } else if (config.get<boolean>('autoConnect')) {
         // Check if this is a Vivid project and auto-start runtime
-        vscode.workspace.findFiles('**/chain.cpp', null, 1).then(files => {
-            if (files.length > 0) {
+        // Only check root and src/ - avoids false positives from runtime source templates
+        Promise.all([
+            vscode.workspace.findFiles('chain.cpp', null, 1),
+            vscode.workspace.findFiles('src/chain.cpp', null, 1)
+        ]).then(([rootFiles, srcFiles]) => {
+            if (rootFiles.length > 0 || srcFiles.length > 0) {
                 startRuntime(context);
             }
         });
@@ -227,6 +368,12 @@ export function activate(context: vscode.ExtensionContext) {
             runtimeManager?.checkForUpdates();
         }, 5000);
     }
+
+    // Check if Claude Code is configured to use Vivid MCP server
+    // Delay slightly to not block activation
+    setTimeout(() => {
+        checkAndPromptMcpConfiguration(outputChannel);
+    }, 3000);
 
     context.subscriptions.push(outputChannel, statusBar);
 }
@@ -295,10 +442,16 @@ function connectToRuntime() {
     });
 
     runtimeClient.onParamValues((params) => {
-        currentParams = params;
-        operatorTreeProvider?.updateParams(params);
-        decorationManager?.updateParams(params);
-        nodeInspectorPanel?.updateParams(params);
+        // Merge isConstant info from chain code sync
+        const paramsWithConstantInfo = params.map(p => ({
+            ...p,
+            isConstant: chainCodeSync?.isParamConstant(p.operator, p.name) ?? true
+        }));
+
+        currentParams = paramsWithConstantInfo;
+        operatorTreeProvider?.updateParams(paramsWithConstantInfo);
+        decorationManager?.updateParams(paramsWithConstantInfo);
+        nodeInspectorPanel?.updateParams(paramsWithConstantInfo);
     });
 
     runtimeClient.onPerformanceStats((stats) => {
@@ -785,7 +938,7 @@ async function createProject(context: vscode.ExtensionContext) {
         cancellable: false
     }, async () => {
         return new Promise<void>((resolve, reject) => {
-            const process = spawn(vividPath, args, {
+            const proc = spawn(vividPath, args, {
                 cwd: parentPath,
                 stdio: ['ignore', 'pipe', 'pipe']
             });
@@ -793,19 +946,49 @@ async function createProject(context: vscode.ExtensionContext) {
             let stdout = '';
             let stderr = '';
 
-            process.stdout?.on('data', (data) => {
+            proc.stdout?.on('data', (data) => {
                 stdout += data.toString();
                 outputChannel.append(data.toString());
             });
 
-            process.stderr?.on('data', (data) => {
+            proc.stderr?.on('data', (data) => {
                 stderr += data.toString();
                 outputChannel.append(data.toString());
             });
 
-            process.on('close', (code) => {
+            proc.on('close', (code) => {
                 if (code === 0) {
                     outputChannel.appendLine(`\nProject created successfully at ${projectPath}`);
+
+                    // Create .vscode/c_cpp_properties.json for IntelliSense
+                    const vscodeDir = `${projectPath}/.vscode`;
+                    const cppPropertiesPath = `${vscodeDir}/c_cpp_properties.json`;
+                    const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+                    const platformName = process.platform === 'darwin' ? 'Mac' : process.platform === 'win32' ? 'Win32' : 'Linux';
+
+                    const cppProperties = {
+                        configurations: [
+                            {
+                                name: platformName,
+                                includePath: [
+                                    '${workspaceFolder}/**',
+                                    `${homeDir}/.vivid/include`
+                                ],
+                                cStandard: 'c17',
+                                cppStandard: 'c++17'
+                            }
+                        ],
+                        version: 4
+                    };
+
+                    try {
+                        fs.mkdirSync(vscodeDir, { recursive: true });
+                        fs.writeFileSync(cppPropertiesPath, JSON.stringify(cppProperties, null, 4));
+                        outputChannel.appendLine(`Created ${cppPropertiesPath}`);
+                    } catch (err) {
+                        outputChannel.appendLine(`Warning: Failed to create c_cpp_properties.json: ${err}`);
+                    }
+
                     resolve();
                 } else {
                     outputChannel.appendLine(`\nProject creation failed with code ${code}`);
@@ -813,7 +996,7 @@ async function createProject(context: vscode.ExtensionContext) {
                 }
             });
 
-            process.on('error', (err) => {
+            proc.on('error', (err) => {
                 outputChannel.appendLine(`\nFailed to run vivid: ${err.message}`);
                 reject(err);
             });
@@ -830,4 +1013,8 @@ async function createProject(context: vscode.ExtensionContext) {
 
 export function deactivate() {
     stopRuntime();
+    if (hookServer) {
+        hookServer.close();
+        hookServer = undefined;
+    }
 }

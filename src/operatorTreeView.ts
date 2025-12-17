@@ -19,6 +19,8 @@ export interface ParamData {
     stringValue?: string;
     fileFilter?: string;
     fileCategory?: string;
+    // True if value is a constant literal in source, false if expression
+    isConstant?: boolean;
 }
 
 class OperatorTreeItem extends vscode.TreeItem {

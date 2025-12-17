@@ -188,18 +188,26 @@ export class NodeInspectorPanel implements vscode.WebviewViewProvider {
         }
         input[type="range"] {
             flex: 1;
-            height: 4px;
+            height: 16px;
             -webkit-appearance: none;
+            background: transparent;
+            border-radius: 2px;
+            touch-action: none;
+            cursor: pointer;
+        }
+        input[type="range"]::-webkit-slider-runnable-track {
+            height: 4px;
             background: var(--vscode-input-background);
             border-radius: 2px;
         }
         input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
-            width: 12px;
-            height: 12px;
+            width: 14px;
+            height: 14px;
             background: var(--vscode-button-background);
             border-radius: 50%;
             cursor: pointer;
+            margin-top: -5px;
         }
         input[type="number"] {
             width: 60px;
@@ -222,6 +230,22 @@ export class NodeInspectorPanel implements vscode.WebviewViewProvider {
             border: 1px solid var(--vscode-input-border);
             border-radius: 2px;
             cursor: pointer;
+        }
+        /* Disabled state for non-constant params */
+        input:disabled,
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+        .param-row.disabled {
+            opacity: 0.6;
+        }
+        .param-row.disabled .param-name::after {
+            content: ' (computed)';
+            font-size: 10px;
+            opacity: 0.7;
+            font-style: italic;
         }
         .vec-inputs {
             display: flex;
@@ -345,6 +369,9 @@ export class NodeInspectorPanel implements vscode.WebviewViewProvider {
         function renderParam(param) {
             const name = escapeHtml(param.name);
             const operator = escapeHtml(param.operator);
+            const isConstant = param.isConstant !== false; // Default to true if undefined
+            const disabledAttr = isConstant ? '' : 'disabled';
+            const disabledClass = isConstant ? '' : 'disabled';
 
             let control = '';
             switch (param.type) {
@@ -356,11 +383,13 @@ export class NodeInspectorPanel implements vscode.WebviewViewProvider {
                             <input type="range"
                                    min="\${param.min}" max="\${param.max}" step="\${step}"
                                    value="\${param.value[0]}"
-                                   oninput="onSliderChange('\${operator}', '\${name}', this.value, '\${param.type}')">
+                                   oninput="onSliderChange('\${operator}', '\${name}', this.value, '\${param.type}')"
+                                   \${disabledAttr}>
                             <input type="number"
                                    min="\${param.min}" max="\${param.max}" step="\${step}"
                                    value="\${param.value[0].toFixed(param.type === 'Int' ? 0 : 2)}"
-                                   onchange="onNumberChange('\${operator}', '\${name}', this.value, '\${param.type}')">
+                                   onchange="onNumberChange('\${operator}', '\${name}', this.value, '\${param.type}')"
+                                   \${disabledAttr}>
                         </div>
                     \`;
                     break;
@@ -368,7 +397,8 @@ export class NodeInspectorPanel implements vscode.WebviewViewProvider {
                 case 'Bool':
                     control = \`
                         <input type="checkbox" \${param.value[0] ? 'checked' : ''}
-                               onchange="onBoolChange('\${operator}', '\${name}', this.checked)">
+                               onchange="onBoolChange('\${operator}', '\${name}', this.checked)"
+                               \${disabledAttr}>
                     \`;
                     break;
 
@@ -377,7 +407,8 @@ export class NodeInspectorPanel implements vscode.WebviewViewProvider {
                     control = \`
                         <div class="param-control">
                             <input type="color" value="\${hex}"
-                                   onchange="onColorChange('\${operator}', '\${name}', this.value, \${param.value[3]})">
+                                   onchange="onColorChange('\${operator}', '\${name}', this.value, \${param.value[3]})"
+                                   \${disabledAttr}>
                             <span class="param-value">\${hex}</span>
                         </div>
                     \`;
@@ -387,9 +418,11 @@ export class NodeInspectorPanel implements vscode.WebviewViewProvider {
                     control = \`
                         <div class="vec-inputs">
                             <input type="number" step="0.01" value="\${param.value[0].toFixed(2)}"
-                                   onchange="onVecChange('\${operator}', '\${name}', 0, this.value, 2)">
+                                   onchange="onVecChange('\${operator}', '\${name}', 0, this.value, 2)"
+                                   \${disabledAttr}>
                             <input type="number" step="0.01" value="\${param.value[1].toFixed(2)}"
-                                   onchange="onVecChange('\${operator}', '\${name}', 1, this.value, 2)">
+                                   onchange="onVecChange('\${operator}', '\${name}', 1, this.value, 2)"
+                                   \${disabledAttr}>
                         </div>
                     \`;
                     break;
@@ -398,11 +431,14 @@ export class NodeInspectorPanel implements vscode.WebviewViewProvider {
                     control = \`
                         <div class="vec-inputs">
                             <input type="number" step="0.01" value="\${param.value[0].toFixed(2)}"
-                                   onchange="onVecChange('\${operator}', '\${name}', 0, this.value, 3)">
+                                   onchange="onVecChange('\${operator}', '\${name}', 0, this.value, 3)"
+                                   \${disabledAttr}>
                             <input type="number" step="0.01" value="\${param.value[1].toFixed(2)}"
-                                   onchange="onVecChange('\${operator}', '\${name}', 1, this.value, 3)">
+                                   onchange="onVecChange('\${operator}', '\${name}', 1, this.value, 3)"
+                                   \${disabledAttr}>
                             <input type="number" step="0.01" value="\${param.value[2].toFixed(2)}"
-                                   onchange="onVecChange('\${operator}', '\${name}', 2, this.value, 3)">
+                                   onchange="onVecChange('\${operator}', '\${name}', 2, this.value, 3)"
+                                   \${disabledAttr}>
                         </div>
                     \`;
                     break;
@@ -411,13 +447,17 @@ export class NodeInspectorPanel implements vscode.WebviewViewProvider {
                     control = \`
                         <div class="vec-inputs">
                             <input type="number" step="0.01" value="\${param.value[0].toFixed(2)}"
-                                   onchange="onVecChange('\${operator}', '\${name}', 0, this.value, 4)">
+                                   onchange="onVecChange('\${operator}', '\${name}', 0, this.value, 4)"
+                                   \${disabledAttr}>
                             <input type="number" step="0.01" value="\${param.value[1].toFixed(2)}"
-                                   onchange="onVecChange('\${operator}', '\${name}', 1, this.value, 4)">
+                                   onchange="onVecChange('\${operator}', '\${name}', 1, this.value, 4)"
+                                   \${disabledAttr}>
                             <input type="number" step="0.01" value="\${param.value[2].toFixed(2)}"
-                                   onchange="onVecChange('\${operator}', '\${name}', 2, this.value, 4)">
+                                   onchange="onVecChange('\${operator}', '\${name}', 2, this.value, 4)"
+                                   \${disabledAttr}>
                             <input type="number" step="0.01" value="\${param.value[3].toFixed(2)}"
-                                   onchange="onVecChange('\${operator}', '\${name}', 3, this.value, 4)">
+                                   onchange="onVecChange('\${operator}', '\${name}', 3, this.value, 4)"
+                                   \${disabledAttr}>
                         </div>
                     \`;
                     break;
@@ -430,7 +470,7 @@ export class NodeInspectorPanel implements vscode.WebviewViewProvider {
                     control = \`
                         <div class="file-input">
                             <span class="file-path" title="\${escapeHtml(pathValue)}">\${escapeHtml(fileName)}</span>
-                            \${isFilePath ? \`<button class="browse-btn" onclick="browseFile('\${operator}', '\${name}', '\${escapeHtml(param.fileFilter || '*.*')}', '\${escapeHtml(param.fileCategory || '')}')">Browse</button>\` : ''}
+                            \${isFilePath ? \`<button class="browse-btn" onclick="browseFile('\${operator}', '\${name}', '\${escapeHtml(param.fileFilter || '*.*')}', '\${escapeHtml(param.fileCategory || '')}')" \${disabledAttr}>Browse</button>\` : ''}
                         </div>
                     \`;
                     break;
@@ -440,7 +480,7 @@ export class NodeInspectorPanel implements vscode.WebviewViewProvider {
             }
 
             return \`
-                <div class="param-row">
+                <div class="param-row \${disabledClass}">
                     <div class="param-name">
                         <span>\${name}</span>
                         <span class="param-value">\${param.type}</span>
@@ -566,6 +606,13 @@ export class NodeInspectorPanel implements vscode.WebviewViewProvider {
                 category: category
             });
         }
+
+        // Fix slider dragging - capture pointer so drag continues when cursor leaves thumb
+        document.addEventListener('pointerdown', (e) => {
+            if (e.target.matches('input[type="range"]')) {
+                e.target.setPointerCapture(e.pointerId);
+            }
+        });
     </script>
 </body>
 </html>`;

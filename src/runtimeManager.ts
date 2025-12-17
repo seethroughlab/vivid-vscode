@@ -31,10 +31,18 @@ interface VersionInfo {
 export class RuntimeManager {
     private installDir: string;
     private outputChannel: vscode.OutputChannel;
+    private extensionPath: string = '';
 
     constructor(outputChannel: vscode.OutputChannel) {
         this.outputChannel = outputChannel;
         this.installDir = path.join(os.homedir(), '.vivid');
+    }
+
+    /**
+     * Set the extension path (needed for copying MCP server)
+     */
+    setExtensionPath(extensionPath: string): void {
+        this.extensionPath = extensionPath;
     }
 
     /**
@@ -60,6 +68,20 @@ export class RuntimeManager {
      */
     get libPath(): string {
         return path.join(this.installDir, 'lib');
+    }
+
+    /**
+     * Get the docs directory path
+     */
+    get docsPath(): string {
+        return path.join(this.installDir, 'docs');
+    }
+
+    /**
+     * Get the MCP server script path
+     */
+    get mcpServerPath(): string {
+        return path.join(this.installDir, 'mcp-server.js');
     }
 
     /**
@@ -97,6 +119,37 @@ export class RuntimeManager {
         };
         const versionFile = path.join(this.installDir, 'version.json');
         fs.writeFileSync(versionFile, JSON.stringify(info, null, 2));
+    }
+
+    /**
+     * Install the MCP server bundle from the extension to ~/.vivid/
+     */
+    installMcpServer(): boolean {
+        if (!this.extensionPath) {
+            this.outputChannel.appendLine('Cannot install MCP server: extension path not set');
+            return false;
+        }
+
+        const sourcePath = path.join(this.extensionPath, 'out', 'mcp-server.bundle.js');
+        if (!fs.existsSync(sourcePath)) {
+            this.outputChannel.appendLine(`MCP server bundle not found at: ${sourcePath}`);
+            return false;
+        }
+
+        try {
+            // Ensure install directory exists
+            if (!fs.existsSync(this.installDir)) {
+                fs.mkdirSync(this.installDir, { recursive: true });
+            }
+
+            // Copy the MCP server bundle
+            fs.copyFileSync(sourcePath, this.mcpServerPath);
+            this.outputChannel.appendLine(`MCP server installed to: ${this.mcpServerPath}`);
+            return true;
+        } catch (error) {
+            this.outputChannel.appendLine(`Failed to install MCP server: ${error}`);
+            return false;
+        }
     }
 
     /**

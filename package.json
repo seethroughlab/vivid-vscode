@@ -12,7 +12,10 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Visualization", "Other"],
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
   "activationEvents": [
     "onStartupFinished"
   ],
@@ -23,7 +26,7 @@
         {
           "id": "vivid",
           "title": "Vivid",
-          "icon": "$(symbol-misc)"
+          "icon": "resources/vivid-icon.svg"
         }
       ]
     },
@@ -100,6 +103,10 @@
       {
         "command": "vivid.createProject",
         "title": "Vivid: Create New Project"
+      },
+      {
+        "command": "vivid.configureMcp",
+        "title": "Vivid: Configure MCP Server"
       }
     ],
     "menus": {
@@ -171,30 +178,40 @@
     "languages": [
       {
         "id": "wgsl",
-        "extensions": [".wgsl"],
+        "extensions": [
+          ".wgsl"
+        ],
         "configuration": "./language-configuration.json"
       }
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run esbuild-base -- --minify && npm run bundle-mcp",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
+    "esbuild-base": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --external:web-tree-sitter --format=cjs --platform=node",
+    "esbuild": "npm run esbuild-base -- --sourcemap",
+    "esbuild-watch": "npm run esbuild-base -- --sourcemap --watch",
+    "bundle-mcp": "esbuild src/mcp/server.ts --bundle --platform=node --target=node18 --outfile=out/mcp-server.bundle.js",
     "package": "vsce package",
     "publish": "vsce publish"
   },
+  "dependencies": {
+    "web-tree-sitter": "^0.26.3"
+  },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
     "@types/node": "^20.10.0",
     "@types/vscode": "^1.85.0",
     "@types/ws": "^8.5.10",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
+    "@vscode/tree-sitter-wasm": "^0.3.0",
     "@vscode/vsce": "^2.22.0",
+    "esbuild": "^0.20.0",
     "eslint": "^8.50.0",
-    "typescript": "^5.3.0"
-  },
-  "dependencies": {
+    "typescript": "^5.3.0",
     "ws": "^8.14.2"
   }
 }
