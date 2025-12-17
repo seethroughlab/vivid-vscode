@@ -12,6 +12,50 @@ import { ChainCodeSync } from './chainCodeSync';
 import { RuntimeManager } from './runtimeManager';
 import { ChildProcess, spawn } from 'child_process';
 import { checkAndPromptMcpConfiguration } from './mcpConfigChecker';
+import * as os from 'os';
+
+// File for sharing runtime status with MCP server
+const RUNTIME_STATUS_FILE = path.join(os.homedir(), '.vivid', 'runtime-status.json');
+
+interface RuntimeStatus {
+    connected: boolean;
+    lastError: string | null;
+    lastErrorTime: string | null;
+    compileSuccess: boolean | null;
+    compileError: string | null;
+    compileErrorTime: string | null;
+}
+
+function writeRuntimeStatus(status: Partial<RuntimeStatus>) {
+    try {
+        let current: RuntimeStatus = {
+            connected: false,
+            lastError: null,
+            lastErrorTime: null,
+            compileSuccess: null,
+            compileError: null,
+            compileErrorTime: null
+        };
+
+        // Read existing status
+        if (fs.existsSync(RUNTIME_STATUS_FILE)) {
+            current = JSON.parse(fs.readFileSync(RUNTIME_STATUS_FILE, 'utf8'));
+        }
+
+        // Merge updates
+        const updated = { ...current, ...status };
+
+        // Ensure directory exists
+        const dir = path.dirname(RUNTIME_STATUS_FILE);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+
+        fs.writeFileSync(RUNTIME_STATUS_FILE, JSON.stringify(updated, null, 2));
+    } catch (e) {
+        // Ignore errors writing status
+    }
+}
 
 let runtimeClient: RuntimeClient | undefined;
 let runtimeManager: RuntimeManager | undefined;
@@ -198,22 +242,31 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     // Watch for external file changes (e.g., Claude Code edits)
-    // Prompt user to reload if the file has unsaved changes
+    // Auto-reload clean buffers, prompt for dirty buffers
     const chainFileWatcher = vscode.workspace.createFileSystemWatcher('**/chain.cpp');
     chainFileWatcher.onDidChange(async (uri) => {
         const document = vscode.workspace.textDocuments.find(
             doc => doc.uri.fsPath === uri.fsPath
         );
 
-        if (document && document.isDirty) {
-            const choice = await vscode.window.showWarningMessage(
-                `"${path.basename(uri.fsPath)}" was modified externally. Reload to see changes?`,
-                'Reload',
-                'Ignore'
-            );
+        if (document) {
+            if (document.isDirty) {
+                // Buffer has unsaved changes - prompt user
+                const choice = await vscode.window.showWarningMessage(
+                    `"${path.basename(uri.fsPath)}" was modified externally. Reload to see changes?`,
+                    'Reload',
+                    'Ignore'
+                );
 
-            if (choice === 'Reload') {
+                if (choice === 'Reload') {
+                    await vscode.commands.executeCommand('workbench.action.files.revert', uri);
+                    chainCodeSync?.onDocumentChanged();
+                }
+            } else {
+                // Buffer is clean - auto-reload to stay in sync with disk
                 await vscode.commands.executeCommand('workbench.action.files.revert', uri);
+                chainCodeSync?.onDocumentChanged();
+                outputChannel.appendLine('Auto-reloaded chain.cpp after external edit');
             }
         }
     });
@@ -420,10 +473,20 @@ function connectToRuntime() {
             vscode.window.setStatusBarMessage('$(check) Vivid: Compiled', 3000);
             outputChannel.appendLine('Compilation successful');
             diagnosticCollection.clear();
+            writeRuntimeStatus({
+                compileSuccess: true,
+                compileError: null,
+                compileErrorTime: null
+            });
         } else {
             vscode.window.showErrorMessage(`Vivid compile error: ${message}`);
             outputChannel.appendLine(`Compile error: ${message}`);
             showCompileErrors(message);
+            writeRuntimeStatus({
+                compileSuccess: false,
+                compileError: message,
+                compileErrorTime: new Date().toISOString()
+            });
         }
         statusBar?.setCompileStatus(success);
     });
@@ -468,14 +531,20 @@ function connectToRuntime() {
 
     runtimeClient.onError((error) => {
         outputChannel.appendLine(`Runtime error: ${error}`);
+        writeRuntimeStatus({
+            lastError: error,
+            lastErrorTime: new Date().toISOString()
+        });
         if (error.includes('ECONNREFUSED')) {
             vscode.window.showWarningMessage('Vivid: Cannot connect to runtime. Is it running?');
+            writeRuntimeStatus({ connected: false });
         } else if (!error.includes('Parse error')) {
             vscode.window.showErrorMessage(`Vivid runtime error: ${error}`);
         }
     });
 
     runtimeClient.connect();
+    writeRuntimeStatus({ connected: true });
 }
 
 function isVividFile(document: vscode.TextDocument): boolean {

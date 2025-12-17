@@ -23,6 +23,32 @@ import * as os from 'os';
 // Documentation directory - check env var first for local dev, fall back to ~/.vivid/docs
 const DOCS_DIR = process.env.VIVID_DOCS_DIR || path.join(os.homedir(), '.vivid', 'docs');
 
+// Runtime status file (written by VS Code extension)
+const RUNTIME_STATUS_FILE = path.join(os.homedir(), '.vivid', 'runtime-status.json');
+
+interface RuntimeStatus {
+    connected: boolean;
+    lastError: string | null;
+    lastErrorTime: string | null;
+    compileSuccess: boolean | null;
+    compileError: string | null;
+    compileErrorTime: string | null;
+}
+
+/**
+ * Read the runtime status from the shared file
+ */
+function readRuntimeStatus(): RuntimeStatus | null {
+    try {
+        if (!fs.existsSync(RUNTIME_STATUS_FILE)) {
+            return null;
+        }
+        return JSON.parse(fs.readFileSync(RUNTIME_STATUS_FILE, 'utf8'));
+    } catch {
+        return null;
+    }
+}
+
 // Documentation files and their descriptions
 const DOC_FILES: Record<string, { file: string; description: string }> = {
     'reference': {
@@ -246,6 +272,15 @@ async function main() {
                         required: ['name'],
                     },
                 },
+                {
+                    name: 'get_vivid_errors',
+                    description: 'Get the current Vivid runtime status including any compile errors or runtime errors. Use this to diagnose issues when the user reports problems with their Vivid project.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {},
+                        required: [],
+                    },
+                },
             ],
         };
     });
@@ -307,6 +342,51 @@ async function main() {
                     {
                         type: 'text',
                         text: info,
+                    },
+                ],
+            };
+        }
+
+        if (name === 'get_vivid_errors') {
+            const status = readRuntimeStatus();
+
+            if (!status) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: 'No runtime status available. The Vivid VS Code extension may not be running, or no errors have occurred yet.',
+                        },
+                    ],
+                };
+            }
+
+            let output = '## Vivid Runtime Status\n\n';
+            output += `**Connected:** ${status.connected ? 'Yes' : 'No'}\n\n`;
+
+            if (status.compileSuccess === false && status.compileError) {
+                output += `### Compile Error\n`;
+                output += `**Time:** ${status.compileErrorTime}\n\n`;
+                output += '```\n' + status.compileError + '\n```\n\n';
+            } else if (status.compileSuccess === true) {
+                output += `**Last compile:** Success\n\n`;
+            }
+
+            if (status.lastError) {
+                output += `### Runtime Error\n`;
+                output += `**Time:** ${status.lastErrorTime}\n\n`;
+                output += '```\n' + status.lastError + '\n```\n\n';
+            }
+
+            if (status.compileSuccess === true && !status.lastError) {
+                output += '*No errors reported.*\n';
+            }
+
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: output,
                     },
                 ],
             };
