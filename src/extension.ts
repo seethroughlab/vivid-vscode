@@ -7,7 +7,7 @@ import { PerformancePanelProvider } from './performancePanel';
 import { NodeInspectorPanel } from './nodeInspectorPanel';
 import { ChainCodeSync } from './chainCodeSync';
 import { RuntimeManager } from './runtimeManager';
-import { ChildProcess } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 
 let runtimeClient: RuntimeClient | undefined;
 let runtimeManager: RuntimeManager | undefined;
@@ -132,7 +132,8 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('vivid.exitSolo', exitSolo),
         vscode.commands.registerCommand('vivid.inspectOperator', inspectOperator),
         vscode.commands.registerCommand('vivid.checkForUpdates', () => runtimeManager?.checkForUpdates()),
-        vscode.commands.registerCommand('vivid.reinstallRuntime', () => runtimeManager?.installOrUpdate(true))
+        vscode.commands.registerCommand('vivid.reinstallRuntime', () => runtimeManager?.installOrUpdate(true)),
+        vscode.commands.registerCommand('vivid.createProject', () => createProject(context))
     );
 
     // Watch for editor changes
@@ -648,6 +649,156 @@ function exitSolo() {
 
     runtimeClient.sendSoloExit();
     outputChannel.appendLine('Exited solo mode');
+}
+
+async function createProject(context: vscode.ExtensionContext) {
+    if (!runtimeManager) {
+        vscode.window.showErrorMessage('Runtime manager not initialized');
+        return;
+    }
+
+    // Ensure runtime is installed (we need the vivid CLI)
+    const installed = await runtimeManager.ensureInstalled();
+    if (!installed) {
+        return;
+    }
+
+    // Step 1: Get project name
+    const projectName = await vscode.window.showInputBox({
+        prompt: 'Enter project name',
+        placeHolder: 'my-vivid-project',
+        validateInput: (value) => {
+            if (!value || value.trim().length === 0) {
+                return 'Project name is required';
+            }
+            if (!/^[a-zA-Z0-9_-]+$/.test(value)) {
+                return 'Project name can only contain letters, numbers, hyphens, and underscores';
+            }
+            return undefined;
+        }
+    });
+
+    if (!projectName) {
+        return; // User cancelled
+    }
+
+    // Step 2: Select template
+    const templates = [
+        { label: 'blank', description: 'Default template with Noise operator and offset animation' },
+        { label: 'minimal', description: 'Bare minimum template (empty skeleton)' },
+        { label: 'noise-demo', description: 'Noise generator with animation' },
+        { label: 'feedback', description: 'Recursive feedback effects' },
+        { label: 'audio-visualizer', description: 'FFT analysis and beat detection with reactive visuals' },
+        { label: '3d-orbit', description: '3D rendering with orbital camera' }
+    ];
+
+    const selectedTemplate = await vscode.window.showQuickPick(templates, {
+        placeHolder: 'Select a project template',
+        title: 'Vivid Project Template'
+    });
+
+    if (!selectedTemplate) {
+        return; // User cancelled
+    }
+
+    // Step 3: Select addons (multi-select)
+    const addons = [
+        { label: 'vivid-audio', description: 'Audio input, FFT analysis, beat detection, oscillators', picked: false },
+        { label: 'vivid-video', description: 'Video playback (HAP codec, platform decoders)', picked: false },
+        { label: 'vivid-render3d', description: '3D rendering with PBR materials, GLTF loading, CSG', picked: false }
+    ];
+
+    const selectedAddons = await vscode.window.showQuickPick(addons, {
+        placeHolder: 'Select addons to include (optional)',
+        title: 'Vivid Addons',
+        canPickMany: true
+    });
+
+    // Step 4: Select parent directory
+    const folderUri = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        openLabel: 'Select Parent Folder',
+        title: 'Where do you want to create the project?'
+    });
+
+    if (!folderUri || folderUri.length === 0) {
+        return; // User cancelled
+    }
+
+    const parentPath = folderUri[0].fsPath;
+    const projectPath = `${parentPath}/${projectName}`;
+
+    // Build command arguments
+    const args = ['new', projectName, '--template', selectedTemplate.label, '--yes'];
+
+    if (selectedAddons && selectedAddons.length > 0) {
+        const addonList = selectedAddons.map(a => a.label).join(',');
+        args.push('--addons', addonList);
+    }
+
+    outputChannel.appendLine(`Creating project: vivid ${args.join(' ')}`);
+    outputChannel.appendLine(`In directory: ${parentPath}`);
+    outputChannel.show();
+
+    // Execute vivid new command
+    const vividPath = runtimeManager.executablePath;
+
+    await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: `Creating Vivid project "${projectName}"...`,
+        cancellable: false
+    }, async () => {
+        return new Promise<void>((resolve, reject) => {
+            const process = spawn(vividPath, args, {
+                cwd: parentPath,
+                stdio: ['ignore', 'pipe', 'pipe']
+            });
+
+            let stdout = '';
+            let stderr = '';
+
+            process.stdout?.on('data', (data) => {
+                stdout += data.toString();
+                outputChannel.append(data.toString());
+            });
+
+            process.stderr?.on('data', (data) => {
+                stderr += data.toString();
+                outputChannel.append(data.toString());
+            });
+
+            process.on('close', (code) => {
+                if (code === 0) {
+                    outputChannel.appendLine(`\nProject created successfully at ${projectPath}`);
+                    resolve();
+                } else {
+                    outputChannel.appendLine(`\nProject creation failed with code ${code}`);
+                    reject(new Error(stderr || 'Unknown error'));
+                }
+            });
+
+            process.on('error', (err) => {
+                outputChannel.appendLine(`\nFailed to run vivid: ${err.message}`);
+                reject(err);
+            });
+        });
+    });
+
+    // Ask user if they want to open the new project
+    const openChoice = await vscode.window.showInformationMessage(
+        `Project "${projectName}" created successfully!`,
+        'Open in New Window',
+        'Open in Current Window',
+        'Close'
+    );
+
+    if (openChoice === 'Open in New Window') {
+        await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(projectPath), true);
+    } else if (openChoice === 'Open in Current Window') {
+        await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(projectPath), false);
+    }
 }
 
 export function deactivate() {

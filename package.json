@@ -16,7 +16,8 @@
   "activationEvents": [
     "workspaceContains:**/chain.cpp",
     "onLanguage:cpp",
-    "onView:vividOperators"
+    "onView:vividOperators",
+    "onCommand:vivid.createProject"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -98,6 +99,10 @@
       {
         "command": "vivid.reinstallRuntime",
         "title": "Vivid: Reinstall Runtime"
+      },
+      {
+        "command": "vivid.createProject",
+        "title": "Vivid: Create New Project"
       }
     ],
     "menus": {
