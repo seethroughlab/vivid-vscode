@@ -13,8 +13,14 @@ interface OperatorParamMap {
     };
 }
 
+interface OperatorLocation {
+    line: number;
+    endColumn: number;  // Where to insert new params (before semicolon or end of chain)
+}
+
 export class ChainCodeSync {
     private paramMap: OperatorParamMap = {};
+    private operatorLocations: { [name: string]: OperatorLocation } = {};
     private chainDocument: vscode.TextDocument | undefined;
     private pendingUpdates: Map<string, { value: number[], timeout: NodeJS.Timeout }> = new Map();
     private debounceMs = 500;
@@ -38,12 +44,14 @@ export class ChainCodeSync {
         }
 
         this.paramMap = {};
+        this.operatorLocations = {};
         const text = this.chainDocument.getText();
         const lines = text.split('\n');
 
         // Find operator declarations and their parameters
         // Pattern: chain.add<Type>("name") followed by .paramName(value)
         let currentOperator: string | undefined;
+        let currentOperatorStartLine: number | undefined;
 
         for (let lineNum = 0; lineNum < lines.length; lineNum++) {
             const line = lines[lineNum];
@@ -52,6 +60,7 @@ export class ChainCodeSync {
             const addMatch = line.match(/chain\.add<[^>]+>\s*\(\s*["']([^"']+)["']\s*\)/);
             if (addMatch) {
                 currentOperator = addMatch[1];
+                currentOperatorStartLine = lineNum;
                 if (!this.paramMap[currentOperator]) {
                     this.paramMap[currentOperator] = {};
                 }
@@ -61,6 +70,7 @@ export class ChainCodeSync {
             const autoAddMatch = line.match(/auto\s*&?\s*\w+\s*=\s*chain\.add<[^>]+>\s*\(\s*["']([^"']+)["']\s*\)/);
             if (autoAddMatch) {
                 currentOperator = autoAddMatch[1];
+                currentOperatorStartLine = lineNum;
                 if (!this.paramMap[currentOperator]) {
                     this.paramMap[currentOperator] = {};
                 }
@@ -154,6 +164,15 @@ export class ChainCodeSync {
                 if (line.trim().endsWith(';') && !line.includes('chain.add')) {
                     // Only reset if we're not starting a new add on the same line
                     if (!addMatch && !autoAddMatch) {
+                        // Record the operator's end location (before the semicolon)
+                        if (currentOperator) {
+                            const semicolonPos = line.lastIndexOf(';');
+                            this.operatorLocations[currentOperator] = {
+                                line: lineNum,
+                                endColumn: semicolonPos
+                            };
+                        }
+
                         // Look ahead to see if next non-empty line continues the chain
                         let nextLineNum = lineNum + 1;
                         while (nextLineNum < lines.length && lines[nextLineNum].trim() === '') {
@@ -163,6 +182,7 @@ export class ChainCodeSync {
                             const nextLine = lines[nextLineNum].trim();
                             if (!nextLine.startsWith('.')) {
                                 currentOperator = undefined;
+                                currentOperatorStartLine = undefined;
                             }
                         }
                     }
@@ -191,6 +211,7 @@ export class ChainCodeSync {
 
     private async applyParamUpdate(operator: string, param: string, value: number[], paramType: string): Promise<void> {
         if (this.isUpdating) {
+            console.log(`[ChainCodeSync] Skipping - already updating`);
             return;
         }
 
@@ -198,10 +219,15 @@ export class ChainCodeSync {
         await this.parseChainFile();
 
         const opParams = this.paramMap[operator];
-        if (!opParams || !opParams[param]) {
-            // Parameter not found in source - might be dynamically set
+        const existingParam = opParams?.[param];
+
+        if (!existingParam) {
+            // Parameter not found in source - INSERT a new one
+            console.log(`[ChainCodeSync] Param ${operator}.${param} not found, inserting new call`);
+            await this.insertNewParam(operator, param, value, paramType);
             return;
         }
+        console.log(`[ChainCodeSync] Applying update ${operator}.${param} = ${value}`);
 
         const location = opParams[param];
         if (!this.chainDocument) {
@@ -256,6 +282,53 @@ export class ChainCodeSync {
         }
     }
 
+    private async insertNewParam(operator: string, param: string, value: number[], paramType: string): Promise<void> {
+        const opLocation = this.operatorLocations[operator];
+        if (!opLocation || !this.chainDocument) {
+            console.log(`[ChainCodeSync] Can't insert - operator ${operator} location not found`);
+            return;
+        }
+
+        // Format the value
+        const valueStr = this.formatValue(value, paramType);
+
+        // Create the new param call: .paramName(value)
+        const newParamCall = `.${param}(${valueStr})`;
+
+        // Insert before the semicolon
+        const insertPos = new vscode.Position(opLocation.line, opLocation.endColumn);
+
+        this.isUpdating = true;
+        try {
+            const edit = new vscode.WorkspaceEdit();
+            edit.insert(this.chainDocument.uri, insertPos, newParamCall);
+            await vscode.workspace.applyEdit(edit);
+            console.log(`[ChainCodeSync] Inserted ${newParamCall} at line ${opLocation.line}`);
+        } finally {
+            this.isUpdating = false;
+        }
+    }
+
+    private formatValue(value: number[], paramType: string): string {
+        switch (paramType) {
+            case 'Float':
+                return this.formatFloat(value[0]);
+            case 'Int':
+                return Math.round(value[0]).toString();
+            case 'Bool':
+                return value[0] ? 'true' : 'false';
+            case 'Vec2':
+                return `${this.formatFloat(value[0])}, ${this.formatFloat(value[1])}`;
+            case 'Vec3':
+                return `${this.formatFloat(value[0])}, ${this.formatFloat(value[1])}, ${this.formatFloat(value[2])}`;
+            case 'Vec4':
+            case 'Color':
+                return `${this.formatFloat(value[0])}, ${this.formatFloat(value[1])}, ${this.formatFloat(value[2])}, ${this.formatFloat(value[3])}`;
+            default:
+                return this.formatFloat(value[0]);
+        }
+    }
+
     private formatFloat(value: number): string {
         // Format float with 'f' suffix for C++
         const str = value.toFixed(2);
@@ -275,6 +348,7 @@ export class ChainCodeSync {
         }
         this.pendingUpdates.clear();
         this.paramMap = {};
+        this.operatorLocations = {};
         this.chainDocument = undefined;
     }
 }

@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import * as vscode from 'vscode';
 import { OperatorData, ParamData } from './operatorTreeView';
 
 export interface NodeUpdate {
@@ -57,6 +58,7 @@ type Callback<T> = (data: T) => void;
 export class RuntimeClient {
     private ws: WebSocket | null = null;
     private port: number;
+    private outputChannel: vscode.OutputChannel;
     private reconnectTimer: NodeJS.Timeout | null = null;
     private reconnectAttempts = 0;
     private maxReconnectAttempts = 10;
@@ -71,18 +73,24 @@ export class RuntimeClient {
     private soloStateCallbacks: Callback<SoloState>[] = [];
     private errorCallbacks: Callback<string>[] = [];
 
-    constructor(port: number) {
+    constructor(port: number, outputChannel: vscode.OutputChannel) {
         this.port = port;
+        this.outputChannel = outputChannel;
     }
 
     connect() {
         this.cleanup();
 
         try {
-            this.ws = new WebSocket(`ws://localhost:${this.port}`);
+            const url = `ws://localhost:${this.port}`;
+            this.outputChannel.appendLine(`WebSocket connecting to ${url}...`);
+            this.ws = new WebSocket(url);
 
             this.ws.on('open', () => {
+                this.outputChannel.appendLine('WebSocket connected');
                 this.reconnectAttempts = 0;
+                // Request operator list from runtime
+                this.send({ type: 'request_operators' });
                 this.connectedCallbacks.forEach(cb => cb());
             });
 
@@ -91,14 +99,17 @@ export class RuntimeClient {
             });
 
             this.ws.on('close', () => {
+                this.outputChannel.appendLine('WebSocket connection closed');
                 this.disconnectedCallbacks.forEach(cb => cb());
                 this.scheduleReconnect();
             });
 
             this.ws.on('error', (err: Error) => {
+                this.outputChannel.appendLine(`WebSocket error: ${err.message}`);
                 this.errorCallbacks.forEach(cb => cb(err.message));
             });
         } catch (e) {
+            this.outputChannel.appendLine(`WebSocket connect exception: ${e}`);
             this.scheduleReconnect();
         }
     }
@@ -136,6 +147,11 @@ export class RuntimeClient {
     private handleMessage(data: string) {
         try {
             const msg: RuntimeMessage = JSON.parse(data);
+
+            // Log message types (except high-frequency ones)
+            if (msg.type !== 'node_update' && msg.type !== 'performance_stats') {
+                this.outputChannel.appendLine(`WebSocket received: ${msg.type}`);
+            }
 
             switch (msg.type) {
                 case 'node_update':

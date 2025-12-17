@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import { RuntimeClient, NodeUpdate, SoloState } from './runtimeClient';
 import { DecorationManager } from './decorations';
 import { StatusBar } from './statusBar';
@@ -74,7 +75,10 @@ export function activate(context: vscode.ExtensionContext) {
             // Also sync to source code (debounced)
             const paramInfo = currentParams.find(p => p.operator === operator && p.name === param);
             if (paramInfo && chainCodeSync) {
+                outputChannel.appendLine(`Code sync: ${operator}.${param} type=${paramInfo.type}`);
                 chainCodeSync.scheduleParamUpdate(operator, param, value, paramInfo.type);
+            } else {
+                outputChannel.appendLine(`Code sync: param not found for ${operator}.${param} (have ${currentParams.length} params)`);
             }
 
             outputChannel.appendLine(`Inspector: ${operator}.${param} = [${value.join(', ')}]`);
@@ -166,6 +170,15 @@ export function activate(context: vscode.ExtensionContext) {
             const cursorLine = editor.selection.active.line + 1; // 1-indexed
             const operator = findOperatorAtLine(cursorLine);
 
+            // Debug: log when cursor is on a potential operator line
+            if (currentOperators.length > 0 && !operator) {
+                // Only log occasionally to avoid spam
+                const nearestOp = currentOperators.find(op => Math.abs(op.sourceLine - cursorLine) <= 5);
+                if (nearestOp) {
+                    outputChannel.appendLine(`Cursor at line ${cursorLine}, nearest operator "${nearestOp.name}" at line ${nearestOp.sourceLine}`);
+                }
+            }
+
             if (operator && operator.name !== lastSelectedOperator) {
                 lastSelectedOperator = operator.name;
                 // Update VSCode inspector panel
@@ -187,18 +200,28 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Auto-connect if enabled and workspace contains Vivid project
+    // Auto-start runtime if this is a newly created project or autoConnect is enabled
     const config = vscode.workspace.getConfiguration('vivid');
-    if (config.get<boolean>('autoConnect')) {
+    const autoStartProject = context.globalState.get<string>('vivid.autoStartProject');
+    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+    if (autoStartProject && workspacePath && autoStartProject === workspacePath) {
+        // This is a newly created project - clear the flag and auto-start
+        context.globalState.update('vivid.autoStartProject', undefined);
+        // Small delay to let VS Code finish loading
+        setTimeout(() => startRuntime(context), 1000);
+    } else if (config.get<boolean>('autoConnect')) {
+        // Check if this is a Vivid project and auto-start runtime
         vscode.workspace.findFiles('**/chain.cpp', null, 1).then(files => {
             if (files.length > 0) {
-                connectToRuntime();
+                startRuntime(context);
             }
         });
     }
 
-    // Check for updates on startup if enabled
-    if (config.get<boolean>('checkUpdatesOnStart') && runtimeManager?.isInstalled()) {
+    // Check for updates on startup if enabled (skip in dev mode)
+    const customRuntimePath = config.get<string>('runtimePath');
+    if (!customRuntimePath && config.get<boolean>('checkUpdatesOnStart') && runtimeManager?.isInstalled()) {
         // Delay the check slightly to not slow down activation
         setTimeout(() => {
             runtimeManager?.checkForUpdates();
@@ -212,11 +235,13 @@ function connectToRuntime() {
     const config = vscode.workspace.getConfiguration('vivid');
     const port = config.get<number>('websocketPort') || 9876;
 
+    outputChannel.appendLine(`Attempting to connect to runtime on port ${port}...`);
+
     if (runtimeClient) {
         runtimeClient.disconnect();
     }
 
-    runtimeClient = new RuntimeClient(port);
+    runtimeClient = new RuntimeClient(port, outputChannel);
 
     runtimeClient.onConnected(() => {
         outputChannel.appendLine('Connected to Vivid runtime');
@@ -257,7 +282,10 @@ function connectToRuntime() {
     });
 
     runtimeClient.onOperatorList((operators) => {
-        outputChannel.appendLine(`Received ${operators.length} operators`);
+        outputChannel.appendLine(`Received ${operators.length} operators:`);
+        for (const op of operators) {
+            outputChannel.appendLine(`  - "${op.name}" (${op.displayName}) at line ${op.sourceLine}`);
+        }
         currentOperators = operators;
         operatorTreeProvider?.updateOperators(operators);
         decorationManager?.updateOperators(operators);
@@ -390,12 +418,7 @@ function showCompileErrors(message: string) {
     }
 }
 
-async function startRuntime(context: vscode.ExtensionContext) {
-    if (!runtimeManager) {
-        vscode.window.showErrorMessage('Runtime manager not initialized');
-        return;
-    }
-
+async function startRuntime(_context: vscode.ExtensionContext) {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders) {
         vscode.window.showErrorMessage('No workspace folder open');
@@ -406,20 +429,33 @@ async function startRuntime(context: vscode.ExtensionContext) {
     const config = vscode.workspace.getConfiguration('vivid');
     const customPath = config.get<string>('runtimePath');
 
-    if (customPath) {
-        // Use custom path
-        outputChannel.appendLine(`Using custom runtime path: ${customPath}`);
-        const terminal = vscode.window.createTerminal('Vivid Runtime');
-        terminal.show();
-        terminal.sendText(`"${customPath}" "${workspaceFolders[0].uri.fsPath}"`);
-        setTimeout(() => connectToRuntime(), 2000);
-        return;
-    }
+    let execPath: string;
+    let env = process.env;
 
-    // Ensure runtime is installed (download if needed)
-    const installed = await runtimeManager.ensureInstalled();
-    if (!installed) {
-        return;
+    if (customPath) {
+        // Development mode: use custom path, skip all download logic
+        if (!fs.existsSync(customPath)) {
+            vscode.window.showErrorMessage(`Custom runtime not found: ${customPath}`);
+            return;
+        }
+        execPath = customPath;
+        outputChannel.appendLine(`Using development runtime: ${customPath}`);
+        statusBar?.setDevMode(true);
+    } else {
+        // Production mode: use RuntimeManager for download/updates
+        if (!runtimeManager) {
+            vscode.window.showErrorMessage('Runtime manager not initialized');
+            return;
+        }
+
+        const installed = await runtimeManager.ensureInstalled();
+        if (!installed) {
+            return;
+        }
+
+        execPath = runtimeManager.executablePath;
+        env = runtimeManager.getEnvironment();
+        statusBar?.setDevMode(false);
     }
 
     // Stop existing runtime if running
@@ -428,11 +464,11 @@ async function startRuntime(context: vscode.ExtensionContext) {
         runtimeProcess = undefined;
     }
 
-    // Find the chain.cpp to determine project path
     const projectPath = workspaceFolders[0].uri.fsPath;
 
     // Spawn vivid process
-    runtimeProcess = runtimeManager.spawnVivid(projectPath);
+    outputChannel.appendLine(`Starting vivid: ${execPath} "${projectPath}"`);
+    runtimeProcess = spawn(execPath, [projectPath], { env });
 
     runtimeProcess.stdout?.on('data', (data) => {
         outputChannel.append(data.toString());
@@ -452,8 +488,6 @@ async function startRuntime(context: vscode.ExtensionContext) {
         outputChannel.appendLine(`Failed to start vivid: ${err.message}`);
         vscode.window.showErrorMessage(`Failed to start vivid: ${err.message}`);
     });
-
-    outputChannel.appendLine(`Starting runtime: ${runtimeManager.executablePath}`);
 
     // Wait for runtime to start, then connect
     setTimeout(() => connectToRuntime(), 2000);
@@ -786,19 +820,12 @@ async function createProject(context: vscode.ExtensionContext) {
         });
     });
 
-    // Ask user if they want to open the new project
-    const openChoice = await vscode.window.showInformationMessage(
-        `Project "${projectName}" created successfully!`,
-        'Open in New Window',
-        'Open in Current Window',
-        'Close'
-    );
+    // Mark this project for auto-start when opened
+    context.globalState.update('vivid.autoStartProject', projectPath);
 
-    if (openChoice === 'Open in New Window') {
-        await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(projectPath), true);
-    } else if (openChoice === 'Open in Current Window') {
-        await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(projectPath), false);
-    }
+    // Automatically open the new project in a new window
+    vscode.window.showInformationMessage(`Project "${projectName}" created! Opening...`);
+    await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(projectPath), true);
 }
 
 export function deactivate() {
