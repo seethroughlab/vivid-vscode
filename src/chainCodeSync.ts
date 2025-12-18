@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import * as cppParser from './cppParser';
+import { OperatorDefinition } from './operatorCatalog';
+import { generateVariableName, generateFullOperatorBlock } from './operatorCodeGen';
 
 // Decoration for unsaved changes made by the extension
 const pendingChangeDecoration = vscode.window.createTextEditorDecorationType({
@@ -330,6 +332,190 @@ export class ChainCodeSync {
         return (trimmed.includes('.') ? trimmed : str) + 'f';
     }
 
+    /**
+     * Insert a new operator into the chain
+     * @param operator Operator definition from catalog
+     * @param afterLine Line number to insert after (or -1 to find best location)
+     * @param previousOperatorVar Variable name of previous operator (for auto-connect)
+     * @returns The inserted line number and variable name, or null if failed
+     */
+    async insertOperator(
+        operator: OperatorDefinition,
+        afterLine: number = -1,
+        previousOperatorVar?: string
+    ): Promise<{ line: number; variableName: string } | null> {
+        // Re-parse to get fresh state
+        await this.parseChainFile();
+
+        if (!this.chainDocument) {
+            this.log('[ChainCodeSync] No chain document found');
+            return null;
+        }
+
+        // Get existing variable names to avoid conflicts
+        const existingVars = Object.values(this.operatorInfoMap).map(info => info.variableName);
+
+        // Generate unique variable and chain names
+        const variableName = generateVariableName(operator.name, existingVars);
+        const chainName = variableName; // Use same name for simplicity
+
+        // If no specific line given, find best insertion point
+        let insertAfterLine = afterLine;
+        if (insertAfterLine < 0) {
+            // Find the last operator declaration line, or end of setup() function
+            insertAfterLine = this.findBestInsertionLine();
+        }
+
+        // Get indentation from context
+        const contextLine = this.chainDocument.lineAt(Math.min(insertAfterLine, this.chainDocument.lineCount - 1));
+        const indent = contextLine.text.match(/^(\s*)/)?.[1] || '    ';
+
+        // Generate the code block
+        const codeBlock = generateFullOperatorBlock(
+            operator,
+            variableName,
+            chainName,
+            previousOperatorVar,
+            indent
+        );
+
+        this.log(`[ChainCodeSync] Inserting operator ${operator.name} as ${variableName} after line ${insertAfterLine}`);
+
+        this.isUpdating = true;
+        try {
+            const edit = new vscode.WorkspaceEdit();
+            const insertPosition = new vscode.Position(insertAfterLine + 1, 0);
+            edit.insert(this.chainDocument.uri, insertPosition, codeBlock + '\n');
+            await vscode.workspace.applyEdit(edit);
+
+            // Mark the inserted lines as having pending changes
+            const lineCount = codeBlock.split('\n').length;
+            for (let i = 0; i < lineCount; i++) {
+                this.markLineAsPending(insertAfterLine + 1 + i);
+            }
+
+            return {
+                line: insertAfterLine + 1,
+                variableName
+            };
+        } catch (e) {
+            this.log(`[ChainCodeSync] Error inserting operator: ${e}`);
+            return null;
+        } finally {
+            this.isUpdating = false;
+        }
+    }
+
+    /**
+     * Generate the code for inserting an operator without actually inserting it
+     * Used by drag-and-drop to get the code that will be inserted
+     */
+    async generateInsertCode(
+        operator: OperatorDefinition,
+        nearLine: number
+    ): Promise<{ code: string; variableName: string } | null> {
+        // Re-parse to get fresh state
+        await this.parseChainFile();
+
+        if (!this.chainDocument) {
+            return null;
+        }
+
+        // Get existing variable names to avoid conflicts
+        const existingVars = Object.values(this.operatorInfoMap).map(info => info.variableName);
+
+        // Generate unique variable and chain names
+        const variableName = generateVariableName(operator.name, existingVars);
+        const chainName = variableName;
+
+        // Get indentation from context
+        const contextLine = this.chainDocument.lineAt(Math.min(nearLine, this.chainDocument.lineCount - 1));
+        const indent = contextLine.text.match(/^(\s*)/)?.[1] || '    ';
+
+        // Find previous operator for auto-connection
+        const previousOperatorVar = this.getOperatorAtLine(nearLine);
+
+        // Generate the code block
+        const codeBlock = generateFullOperatorBlock(
+            operator,
+            variableName,
+            chainName,
+            previousOperatorVar,
+            indent
+        );
+
+        return {
+            code: codeBlock,
+            variableName
+        };
+    }
+
+    /**
+     * Find the best line to insert a new operator
+     */
+    private findBestInsertionLine(): number {
+        if (!this.chainDocument) return 0;
+
+        // Find the last operator declaration
+        let lastOpLine = -1;
+        for (const info of Object.values(this.operatorInfoMap)) {
+            if (info.line > lastOpLine) {
+                lastOpLine = info.line;
+            }
+            // Also check params for this operator
+            const params = this.paramMap[info.chainName];
+            if (params) {
+                for (const param of Object.values(params)) {
+                    if (param.line > lastOpLine) {
+                        lastOpLine = param.line;
+                    }
+                }
+            }
+        }
+
+        if (lastOpLine >= 0) {
+            return lastOpLine;
+        }
+
+        // No operators found - try to find setup() function and insert after opening brace
+        const text = this.chainDocument.getText();
+        const setupMatch = text.match(/void\s+setup\s*\([^)]*\)\s*\{/);
+        if (setupMatch && setupMatch.index !== undefined) {
+            const beforeSetup = text.substring(0, setupMatch.index + setupMatch[0].length);
+            const setupLine = beforeSetup.split('\n').length - 1;
+            return setupLine;
+        }
+
+        // Fallback to line 10 (after typical includes)
+        return Math.min(10, this.chainDocument.lineCount - 1);
+    }
+
+    /**
+     * Get the variable name of the operator at a given line
+     */
+    getOperatorAtLine(line: number): string | undefined {
+        for (const [chainName, info] of Object.entries(this.operatorInfoMap)) {
+            if (info.line === line) {
+                return info.variableName;
+            }
+        }
+        return undefined;
+    }
+
+    /**
+     * Get all existing variable names
+     */
+    getExistingVariables(): string[] {
+        return Object.values(this.operatorInfoMap).map(info => info.variableName);
+    }
+
+    /**
+     * Get operator info map (for external access)
+     */
+    getOperatorInfoMap(): OperatorInfoMap {
+        return this.operatorInfoMap;
+    }
+
     getParamLocation(operator: string, param: string): ParamLocation | undefined {
         return this.paramMap[operator]?.[param];
     }
@@ -339,6 +525,13 @@ export class ChainCodeSync {
         // If we don't have info about this param, assume it's constant (editable)
         // This handles params that exist in runtime but not in source yet
         return location?.isConstant ?? true;
+    }
+
+    /**
+     * Get the variable name for an operator by its chain name
+     */
+    getOperatorVariable(chainName: string): string | undefined {
+        return this.operatorInfoMap[chainName]?.variableName;
     }
 
     /**

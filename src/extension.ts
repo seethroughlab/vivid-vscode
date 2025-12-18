@@ -12,6 +12,10 @@ import { ChainCodeSync } from './chainCodeSync';
 import { RuntimeManager } from './runtimeManager';
 import { ChildProcess, spawn } from 'child_process';
 import { checkAndPromptMcpConfiguration } from './mcpConfigChecker';
+import { OperatorCatalog } from './operatorCatalog';
+import { OperatorLibraryPanel } from './operatorLibraryPanel';
+import { OperatorDropProvider } from './operatorDropProvider';
+import { AddonManager, showAddonManager } from './addonManager';
 import * as os from 'os';
 
 // File for sharing runtime status with MCP server
@@ -67,6 +71,9 @@ let operatorTreeProvider: OperatorTreeProvider | undefined;
 let performancePanelProvider: PerformancePanelProvider | undefined;
 let nodeInspectorPanel: NodeInspectorPanel | undefined;
 let chainCodeSync: ChainCodeSync | undefined;
+let operatorCatalog: OperatorCatalog | undefined;
+let operatorLibraryPanel: OperatorLibraryPanel | undefined;
+let addonManager: AddonManager | undefined;
 let outputChannel: vscode.OutputChannel;
 let diagnosticCollection: vscode.DiagnosticCollection;
 
@@ -119,6 +126,77 @@ export function activate(context: vscode.ExtensionContext) {
     chainCodeSync = new ChainCodeSync();
     chainCodeSync.setExtensionPath(context.extensionPath);
     chainCodeSync.setOutputChannel(outputChannel);
+
+    // Initialize operator catalog for browsing available operators
+    operatorCatalog = new OperatorCatalog();
+    operatorCatalog.setOutputChannel(outputChannel);
+
+    // Initialize addon manager for installing/removing addons
+    addonManager = new AddonManager(outputChannel);
+
+    // Register operator library panel
+    operatorLibraryPanel = new OperatorLibraryPanel(context.extensionUri);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(
+            OperatorLibraryPanel.viewType,
+            operatorLibraryPanel
+        )
+    );
+
+    // Wire up library panel callback
+    operatorLibraryPanel.onOperatorSelected(async (operator) => {
+        // Insert the operator at current cursor position
+        if (!chainCodeSync) return;
+
+        const editor = vscode.window.activeTextEditor;
+        let afterLine = -1;
+        let previousOperatorVar: string | undefined;
+
+        if (editor && editor.document.fileName.endsWith('chain.cpp')) {
+            const cursorLine = editor.selection.active.line + 1;
+            const operatorAtCursor = findOperatorAtLine(cursorLine);
+            if (operatorAtCursor) {
+                afterLine = operatorAtCursor.sourceLine;
+                previousOperatorVar = chainCodeSync.getOperatorVariable(operatorAtCursor.name);
+            }
+        }
+
+        const result = await chainCodeSync.insertOperator(operator, afterLine, previousOperatorVar);
+        if (result) {
+            outputChannel.appendLine(`Added operator ${operator.name} as "${result.variableName}" at line ${result.line}`);
+
+            const files = await vscode.workspace.findFiles('**/chain.cpp', null, 1);
+            if (files.length > 0) {
+                const doc = await vscode.workspace.openTextDocument(files[0]);
+                const editor = await vscode.window.showTextDocument(doc);
+                const position = new vscode.Position(result.line - 1, 0);
+                editor.selection = new vscode.Selection(position, position);
+                editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+            }
+
+            if (runtimeClient) {
+                setTimeout(() => runtimeClient?.sendReload(), 500);
+            }
+
+            vscode.window.setStatusBarMessage(`$(check) Added ${operator.name}`, 3000);
+        }
+    });
+
+    // Register document drop provider for drag-and-drop from library
+    const dropProvider = new OperatorDropProvider();
+    dropProvider.setCatalog(operatorCatalog);
+    dropProvider.setChainCodeSync(chainCodeSync);
+    dropProvider.setOutputChannel(outputChannel);
+
+    context.subscriptions.push(
+        vscode.languages.registerDocumentDropEditProvider(
+            { language: 'cpp', pattern: '**/chain.cpp' },
+            dropProvider,
+            {
+                dropMimeTypes: ['application/vnd.vivid.operator', 'text/plain']
+            }
+        )
+    );
 
     // Wire up inspector callbacks
     nodeInspectorPanel.onParamChange((operator, param, value) => {
@@ -210,7 +288,11 @@ export function activate(context: vscode.ExtensionContext) {
             } else {
                 vscode.window.showErrorMessage('Failed to configure Vivid MCP server.');
             }
-        })
+        }),
+        vscode.commands.registerCommand('vivid.addOperator', () => addOperator()),
+        vscode.commands.registerCommand('vivid.refreshOperatorLibrary', () => refreshOperatorLibrary()),
+        vscode.commands.registerCommand('vivid.manageAddons', () => manageAddons()),
+        vscode.commands.registerCommand('vivid.bundleProject', () => bundleProject())
     );
 
     // Watch for editor changes
@@ -1078,6 +1160,326 @@ async function createProject(context: vscode.ExtensionContext) {
     // Automatically open the new project in a new window
     vscode.window.showInformationMessage(`Project "${projectName}" created! Opening...`);
     await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(projectPath), true);
+}
+
+async function refreshOperatorLibrary() {
+    if (!operatorCatalog || !operatorLibraryPanel) {
+        return;
+    }
+
+    // Get runtime path
+    const config = vscode.workspace.getConfiguration('vivid');
+    const customPath = config.get<string>('runtimePath');
+    let runtimePath: string | undefined;
+
+    if (customPath) {
+        runtimePath = customPath;
+    } else if (runtimeManager?.isInstalled()) {
+        runtimePath = runtimeManager.executablePath;
+    }
+
+    if (!runtimePath) {
+        operatorLibraryPanel.setLoadError('Vivid runtime not found');
+        return;
+    }
+
+    operatorLibraryPanel.setLoading(true);
+
+    const loaded = await operatorCatalog.loadFromRuntime(runtimePath);
+
+    if (loaded) {
+        operatorLibraryPanel.setCatalog(operatorCatalog);
+    } else {
+        operatorLibraryPanel.setLoadError('Failed to load operators from runtime');
+    }
+}
+
+async function addOperator() {
+    if (!operatorCatalog || !chainCodeSync) {
+        vscode.window.showErrorMessage('Operator catalog not initialized');
+        return;
+    }
+
+    // Get runtime path to load catalog
+    const config = vscode.workspace.getConfiguration('vivid');
+    const customPath = config.get<string>('runtimePath');
+    let runtimePath: string | undefined;
+
+    if (customPath) {
+        runtimePath = customPath;
+    } else if (runtimeManager?.isInstalled()) {
+        runtimePath = runtimeManager.executablePath;
+    }
+
+    if (!runtimePath) {
+        vscode.window.showErrorMessage('Vivid runtime not found. Please install the runtime first.');
+        return;
+    }
+
+    // Load catalog if not already loaded
+    if (!operatorCatalog.isLoaded()) {
+        const loaded = await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: 'Loading operator catalog...',
+            cancellable: false
+        }, async () => {
+            return await operatorCatalog!.loadFromRuntime(runtimePath!);
+        });
+
+        if (!loaded) {
+            vscode.window.showErrorMessage('Failed to load operator catalog from runtime');
+            return;
+        }
+    }
+
+    // Step 1: Show category picker
+    const categoryItems = operatorCatalog.getCategoryQuickPickItems();
+    const selectedCategory = await vscode.window.showQuickPick(categoryItems, {
+        placeHolder: 'Select operator category',
+        title: 'Add Operator'
+    });
+
+    if (!selectedCategory) {
+        return; // User cancelled
+    }
+
+    // Step 2: Show operators in selected category
+    const operatorItems = operatorCatalog.getOperatorQuickPickItems(selectedCategory.label);
+    const selectedOperator = await vscode.window.showQuickPick(operatorItems, {
+        placeHolder: `Select ${selectedCategory.label} operator`,
+        title: `Add ${selectedCategory.label} Operator`
+    });
+
+    if (!selectedOperator) {
+        return; // User cancelled
+    }
+
+    // Get the operator definition
+    const operator = operatorCatalog.getOperator(selectedOperator.label);
+    if (!operator) {
+        vscode.window.showErrorMessage(`Operator "${selectedOperator.label}" not found`);
+        return;
+    }
+
+    // Determine insertion point based on current cursor
+    const editor = vscode.window.activeTextEditor;
+    let afterLine = -1;
+    let previousOperatorVar: string | undefined;
+
+    if (editor && editor.document.fileName.endsWith('chain.cpp')) {
+        const cursorLine = editor.selection.active.line + 1; // 1-indexed
+
+        // Find operator at or near cursor
+        const operatorAtCursor = findOperatorAtLine(cursorLine);
+        if (operatorAtCursor) {
+            // Insert after this operator
+            afterLine = operatorAtCursor.sourceLine;
+            // Find the variable name for this operator
+            const operatorInfo = currentOperators.find(op => op.name === operatorAtCursor.name);
+            if (operatorInfo) {
+                // Get variable name from chain code sync
+                previousOperatorVar = chainCodeSync.getOperatorVariable(operatorInfo.name);
+            }
+        }
+    }
+
+    // Insert the operator
+    const result = await chainCodeSync.insertOperator(operator, afterLine, previousOperatorVar);
+
+    if (result) {
+        outputChannel.appendLine(`Added operator ${operator.name} as "${result.variableName}" at line ${result.line}`);
+
+        // Open chain.cpp and position cursor at the new code
+        const files = await vscode.workspace.findFiles('**/chain.cpp', null, 1);
+        if (files.length > 0) {
+            const doc = await vscode.workspace.openTextDocument(files[0]);
+            const editor = await vscode.window.showTextDocument(doc);
+            const position = new vscode.Position(result.line - 1, 0);
+            editor.selection = new vscode.Selection(position, position);
+            editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+        }
+
+        // Trigger hot reload if connected
+        if (runtimeClient) {
+            // Give VS Code a moment to save the file, then reload
+            setTimeout(() => {
+                runtimeClient?.sendReload();
+            }, 500);
+        }
+
+        vscode.window.setStatusBarMessage(`$(check) Added ${operator.name}`, 3000);
+    } else {
+        vscode.window.showErrorMessage('Failed to insert operator');
+    }
+}
+
+async function manageAddons() {
+    if (!addonManager) {
+        vscode.window.showErrorMessage('Addon manager not initialized');
+        return;
+    }
+
+    // Get runtime path
+    const config = vscode.workspace.getConfiguration('vivid');
+    const customPath = config.get<string>('runtimePath');
+
+    if (customPath) {
+        addonManager.setRuntimePath(customPath);
+    } else if (runtimeManager?.isInstalled()) {
+        addonManager.setRuntimePath(runtimeManager.executablePath);
+    } else {
+        // Try to ensure runtime is installed
+        const installed = await runtimeManager?.ensureInstalled();
+        if (!installed) {
+            vscode.window.showErrorMessage('Vivid runtime not found. Please install it first.');
+            return;
+        }
+        addonManager.setRuntimePath(runtimeManager!.executablePath);
+    }
+
+    await showAddonManager(addonManager);
+}
+
+async function bundleProject() {
+    // Check platform - bundle only works on macOS
+    if (process.platform !== 'darwin') {
+        vscode.window.showErrorMessage('Bundle is only available on macOS.');
+        return;
+    }
+
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders) {
+        vscode.window.showErrorMessage('No workspace folder open');
+        return;
+    }
+
+    const projectPath = workspaceFolders[0].uri.fsPath;
+
+    // Check for chain.cpp
+    const chainPath = path.join(projectPath, 'chain.cpp');
+    if (!fs.existsSync(chainPath)) {
+        vscode.window.showErrorMessage('No chain.cpp found in workspace. Is this a Vivid project?');
+        return;
+    }
+
+    // Get runtime path
+    const config = vscode.workspace.getConfiguration('vivid');
+    const customPath = config.get<string>('runtimePath');
+    let execPath: string;
+
+    if (customPath) {
+        execPath = customPath;
+    } else if (runtimeManager?.isInstalled()) {
+        execPath = runtimeManager.executablePath;
+    } else {
+        const installed = await runtimeManager?.ensureInstalled();
+        if (!installed) {
+            vscode.window.showErrorMessage('Vivid runtime not found. Please install it first.');
+            return;
+        }
+        execPath = runtimeManager!.executablePath;
+    }
+
+    // Get app name from user
+    const projectName = path.basename(projectPath);
+    const defaultAppName = projectName.charAt(0).toUpperCase() + projectName.slice(1).replace(/-/g, '');
+
+    const appName = await vscode.window.showInputBox({
+        prompt: 'Enter app name',
+        value: defaultAppName,
+        placeHolder: 'MyVividApp',
+        validateInput: (value) => {
+            if (!value || value.trim().length === 0) {
+                return 'App name is required';
+            }
+            if (!/^[a-zA-Z0-9_-]+$/.test(value)) {
+                return 'App name can only contain letters, numbers, hyphens, and underscores';
+            }
+            return undefined;
+        }
+    });
+
+    if (!appName) {
+        return; // User cancelled
+    }
+
+    // Ask for output location
+    const outputUri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file(path.join(path.dirname(projectPath), `${appName}.app`)),
+        filters: { 'macOS Application': ['app'] },
+        title: 'Save Application Bundle'
+    });
+
+    if (!outputUri) {
+        return; // User cancelled
+    }
+
+    const outputPath = outputUri.fsPath;
+
+    // Check if output already exists
+    if (fs.existsSync(outputPath)) {
+        const overwrite = await vscode.window.showWarningMessage(
+            `${path.basename(outputPath)} already exists. Overwrite?`,
+            { modal: true },
+            'Overwrite'
+        );
+        if (overwrite !== 'Overwrite') {
+            return;
+        }
+        // Remove existing
+        fs.rmSync(outputPath, { recursive: true, force: true });
+    }
+
+    // Run vivid bundle
+    outputChannel.appendLine(`Bundling: vivid bundle "${projectPath}" -o "${outputPath}" -n "${appName}"`);
+    outputChannel.show();
+
+    await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: `Bundling ${appName}.app...`,
+        cancellable: false
+    }, async () => {
+        return new Promise<void>((resolve, reject) => {
+            const args = ['bundle', projectPath, '-o', outputPath, '-n', appName];
+            const proc = spawn(execPath, args);
+
+            proc.stdout?.on('data', (data) => {
+                outputChannel.append(data.toString());
+            });
+
+            proc.stderr?.on('data', (data) => {
+                outputChannel.append(data.toString());
+            });
+
+            proc.on('close', (code) => {
+                if (code === 0) {
+                    outputChannel.appendLine(`\nBundle created: ${outputPath}`);
+                    resolve();
+                } else {
+                    outputChannel.appendLine(`\nBundle failed with code ${code}`);
+                    reject(new Error(`Bundle failed with code ${code}`));
+                }
+            });
+
+            proc.on('error', (err) => {
+                outputChannel.appendLine(`\nFailed to run vivid: ${err.message}`);
+                reject(err);
+            });
+        });
+    });
+
+    // Show success message with option to reveal in Finder
+    const action = await vscode.window.showInformationMessage(
+        `Successfully created ${appName}.app`,
+        'Reveal in Finder',
+        'Run App'
+    );
+
+    if (action === 'Reveal in Finder') {
+        spawn('open', ['-R', outputPath]);
+    } else if (action === 'Run App') {
+        spawn('open', [outputPath]);
+    }
 }
 
 export function deactivate() {

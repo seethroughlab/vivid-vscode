@@ -19,6 +19,7 @@ import {
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { spawn } from 'child_process';
 
 // Documentation directory - check env var first for local dev, fall back to ~/.vivid/docs
 const DOCS_DIR = process.env.VIVID_DOCS_DIR || path.join(os.homedir(), '.vivid', 'docs');
@@ -131,6 +132,77 @@ function searchDocs(query: string): { docId: string; matches: string[] }[] {
     }
 
     return results;
+}
+
+/**
+ * Find the Vivid runtime executable
+ */
+function findVividRuntime(): string | null {
+    // 1. Check VIVID_RUNTIME_PATH environment variable (for custom builds)
+    const envPath = process.env.VIVID_RUNTIME_PATH;
+    if (envPath && fs.existsSync(envPath)) {
+        return envPath;
+    }
+
+    // 2. Check common development location
+    const devPath = path.join(os.homedir(), 'Developer', 'vivid', 'build', 'bin', 'vivid');
+    if (fs.existsSync(devPath)) {
+        return devPath;
+    }
+
+    // 3. Check standard install locations
+    const locations = [
+        path.join(os.homedir(), '.vivid', 'bin', 'vivid'),
+        path.join(os.homedir(), '.vivid', 'vivid.app', 'Contents', 'MacOS', 'vivid'),
+        '/usr/local/bin/vivid',
+        '/opt/homebrew/bin/vivid',
+    ];
+
+    for (const loc of locations) {
+        if (fs.existsSync(loc)) {
+            return loc;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Run the vivid operators --json command and return the result
+ */
+async function getOperatorsFromRuntime(): Promise<string | null> {
+    const runtimePath = findVividRuntime();
+    if (!runtimePath) {
+        return null;
+    }
+
+    return new Promise((resolve) => {
+        const proc = spawn(runtimePath, ['operators', '--json']);
+        let stdout = '';
+        let stderr = '';
+
+        proc.stdout.on('data', (data) => {
+            stdout += data.toString();
+        });
+
+        proc.stderr.on('data', (data) => {
+            stderr += data.toString();
+        });
+
+        proc.on('close', (code) => {
+            if (code === 0) {
+                resolve(stdout);
+            } else {
+                console.error('vivid operators --json failed:', stderr);
+                resolve(null);
+            }
+        });
+
+        proc.on('error', (err) => {
+            console.error('Failed to spawn vivid:', err);
+            resolve(null);
+        });
+    });
 }
 
 /**
@@ -281,6 +353,15 @@ async function main() {
                         required: [],
                     },
                 },
+                {
+                    name: 'list_vivid_operators',
+                    description: 'Get a structured list of all available Vivid operators with their parameters, types, and defaults. Use this instead of parsing documentation to get accurate operator information. Returns JSON with operators grouped by category.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {},
+                        required: [],
+                    },
+                },
             ],
         };
     });
@@ -390,6 +471,44 @@ async function main() {
                     },
                 ],
             };
+        }
+
+        if (name === 'list_vivid_operators') {
+            const operatorsJson = await getOperatorsFromRuntime();
+
+            if (!operatorsJson) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: 'Failed to get operator list. Make sure the Vivid runtime is installed. Try using the search_vivid_docs tool to find operator information from documentation instead.',
+                        },
+                    ],
+                };
+            }
+
+            // Parse and format for better readability
+            try {
+                const data = JSON.parse(operatorsJson);
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `## Available Vivid Operators\n\nVersion: ${data.version}\n\n\`\`\`json\n${JSON.stringify(data.operators, null, 2)}\n\`\`\``,
+                        },
+                    ],
+                };
+            } catch {
+                // Return raw JSON if parsing fails
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: operatorsJson,
+                        },
+                    ],
+                };
+            }
         }
 
         throw new Error(`Unknown tool: ${name}`);

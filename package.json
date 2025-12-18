@@ -33,8 +33,14 @@
     "views": {
       "vivid": [
         {
+          "id": "vividOperatorLibrary",
+          "name": "Library",
+          "type": "webview",
+          "contextualTitle": "Operator Library"
+        },
+        {
           "id": "vividOperators",
-          "name": "Operators",
+          "name": "Chain",
           "contextualTitle": "Vivid Operators"
         },
         {
@@ -107,6 +113,26 @@
       {
         "command": "vivid.configureMcp",
         "title": "Vivid: Configure MCP Server"
+      },
+      {
+        "command": "vivid.addOperator",
+        "title": "Vivid: Add Operator"
+      },
+      {
+        "command": "vivid.manageAddons",
+        "title": "Vivid: Manage Addons"
+      },
+      {
+        "command": "vivid.bundleProject",
+        "title": "Vivid: Bundle as App"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "vivid.addOperator",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a",
+        "when": "resourceFilename == chain.cpp"
       }
     ],
     "menus": {
