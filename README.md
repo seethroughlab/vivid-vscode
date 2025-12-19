@@ -82,6 +82,7 @@ When you run "Vivid: Start Runtime" without a custom `runtimePath`:
 
 ## Commands
 
+### Runtime
 | Command | Description |
 |---------|-------------|
 | `Vivid: Start Runtime` | Launch Vivid (downloads if needed) |
@@ -89,9 +90,32 @@ When you run "Vivid: Start Runtime" without a custom `runtimePath`:
 | `Vivid: Force Reload` | Trigger hot-reload |
 | `Vivid: Check for Updates` | Check for new Vivid releases |
 | `Vivid: Reinstall Runtime` | Force re-download of runtime |
+
+### Project
+| Command | Description |
+|---------|-------------|
+| `Vivid: Create New Project` | Create a new Vivid project with templates and addon selection |
+| `Vivid: Bundle as App` | Package project as standalone macOS app |
+| `Vivid: Create Operator Template` | Generate a custom operator template file |
+
+### Operators
+| Command | Shortcut | Description |
+|---------|----------|-------------|
+| `Vivid: Add Operator` | `Cmd+Shift+A` | Insert operator from catalog at cursor |
+| `Vivid: Solo Operator` | | Preview single operator output |
+| `Vivid: Exit Solo Mode` | | Return to normal view |
+
+### Editor
+| Command | Description |
+|---------|-------------|
 | `Vivid: Toggle Inline Decorations` | Show/hide inline value previews |
-| `Vivid: Solo Operator` | Preview single operator output |
-| `Vivid: Exit Solo Mode` | Return to normal view |
+| `Vivid: Go to Operator` | Jump to operator definition in chain.cpp |
+
+### Integration
+| Command | Description |
+|---------|-------------|
+| `Vivid: Configure MCP Server` | Set up Claude Code MCP integration |
+| `Vivid: Manage Addons` | Install/remove Vivid addons |
 
 ## Configuration
 
@@ -111,6 +135,34 @@ The extension adds a **Vivid** panel to the Activity Bar with:
 - **Operators**: Tree view of all operators in your chain
 - **Inspector**: Parameter editor for selected operator
 - **Performance**: Real-time FPS and timing metrics
+
+## Creating Custom Operators
+
+Use `Vivid: Create Operator Template` to generate a starting point for your own operators:
+
+1. Run the command from the Command Palette (`Cmd+Shift+P`)
+2. Enter a name (e.g., `ColorShift`, `WaveDistort`)
+3. Select the operator type:
+
+| Type | Use Case |
+|------|----------|
+| **Shader Effect** | Process input textures with WGSL shaders (most common) |
+| **Shader Generator** | Generate textures from scratch (noise, gradients, shapes) |
+| **Value/Modulator** | Output scalar values for animation/modulation |
+| **Audio Synth** | Generate or process audio (requires vivid-audio) |
+| **Audio Analyzer** | Extract values from audio (RMS, spectrum, beats) |
+
+The template is created in `operators/yourOperator.h`. To use it:
+
+```cpp
+// In chain.cpp
+#include "operators/colorShift.h"
+
+void setup(Context& ctx) {
+    auto& chain = ctx.chain();
+    chain.add<ColorShift>("shift");
+}
+```
 
 ## Troubleshooting
 

@@ -33,6 +33,22 @@ export interface SoloState {
     operator?: string;
 }
 
+export interface MonitorInfo {
+    index: number;
+    name: string;
+    width: number;
+    height: number;
+}
+
+export interface WindowState {
+    fullscreen: boolean;
+    borderless: boolean;
+    alwaysOnTop: boolean;
+    cursorVisible: boolean;
+    currentMonitor: number;
+    monitors: MonitorInfo[];
+}
+
 export interface RuntimeMessage {
     type: string;
     nodes?: NodeUpdate[];
@@ -51,6 +67,13 @@ export interface RuntimeMessage {
     // Solo state fields
     active?: boolean;
     operator?: string;
+    // Window state fields
+    fullscreen?: boolean;
+    borderless?: boolean;
+    alwaysOnTop?: boolean;
+    cursorVisible?: boolean;
+    currentMonitor?: number;
+    monitors?: MonitorInfo[];
 }
 
 type Callback<T> = (data: T) => void;
@@ -71,6 +94,7 @@ export class RuntimeClient {
     private paramValuesCallbacks: Callback<ParamData[]>[] = [];
     private performanceStatsCallbacks: Callback<PerformanceStats>[] = [];
     private soloStateCallbacks: Callback<SoloState>[] = [];
+    private windowStateCallbacks: Callback<WindowState>[] = [];
     private errorCallbacks: Callback<string>[] = [];
 
     constructor(port: number, outputChannel: vscode.OutputChannel) {
@@ -202,6 +226,20 @@ export class RuntimeClient {
                     }
                     break;
 
+                case 'window_state':
+                    {
+                        const state: WindowState = {
+                            fullscreen: msg.fullscreen ?? false,
+                            borderless: msg.borderless ?? false,
+                            alwaysOnTop: msg.alwaysOnTop ?? false,
+                            cursorVisible: msg.cursorVisible ?? true,
+                            currentMonitor: msg.currentMonitor ?? 0,
+                            monitors: msg.monitors ?? []
+                        };
+                        this.windowStateCallbacks.forEach(cb => cb(state));
+                    }
+                    break;
+
                 case 'error':
                     this.errorCallbacks.forEach(cb => cb(msg.message ?? 'Unknown error'));
                     break;
@@ -222,6 +260,7 @@ export class RuntimeClient {
     onParamValues(callback: Callback<ParamData[]>) { this.paramValuesCallbacks.push(callback); }
     onPerformanceStats(callback: Callback<PerformanceStats>) { this.performanceStatsCallbacks.push(callback); }
     onSoloState(callback: Callback<SoloState>) { this.soloStateCallbacks.push(callback); }
+    onWindowState(callback: Callback<WindowState>) { this.windowStateCallbacks.push(callback); }
     onError(callback: Callback<string>) { this.errorCallbacks.push(callback); }
 
     // Commands to runtime
@@ -252,6 +291,10 @@ export class RuntimeClient {
     sendFocusedNode(operator: string) {
         // Send empty string to clear focus
         this.send({ type: 'focused_node', operator });
+    }
+
+    sendWindowControl(setting: string, value: number) {
+        this.send({ type: 'window_control', setting, value });
     }
 
     private send(msg: object) {

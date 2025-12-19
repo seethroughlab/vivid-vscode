@@ -54,6 +54,12 @@
           "name": "Performance",
           "type": "webview",
           "contextualTitle": "Vivid Performance"
+        },
+        {
+          "id": "vividWindowControls",
+          "name": "Window",
+          "type": "webview",
+          "contextualTitle": "Window Controls"
         }
       ]
     },
@@ -125,6 +131,10 @@
       {
         "command": "vivid.bundleProject",
         "title": "Vivid: Bundle as App"
+      },
+      {
+        "command": "vivid.createOperatorTemplate",
+        "title": "Vivid: Create Operator Template"
       }
     ],
     "keybindings": [
@@ -169,10 +179,10 @@
     "configuration": {
       "title": "Vivid",
       "properties": {
-        "vivid.runtimePath": {
+        "vivid.vividRoot": {
           "type": "string",
           "default": "",
-          "description": "Custom path to vivid executable (leave empty to use auto-downloaded version)"
+          "description": "Path to vivid source root directory (for development builds). Leave empty to use auto-downloaded runtime."
         },
         "vivid.websocketPort": {
           "type": "number",

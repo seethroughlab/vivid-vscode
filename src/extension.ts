@@ -2,11 +2,12 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
-import { RuntimeClient, NodeUpdate, SoloState } from './runtimeClient';
+import { RuntimeClient, NodeUpdate, SoloState, WindowState } from './runtimeClient';
 import { DecorationManager } from './decorations';
 import { StatusBar } from './statusBar';
 import { OperatorTreeProvider, ParamData, OperatorData } from './operatorTreeView';
 import { PerformancePanelProvider } from './performancePanel';
+import { WindowControlsPanelProvider } from './windowControlsPanel';
 import { NodeInspectorPanel } from './nodeInspectorPanel';
 import { ChainCodeSync } from './chainCodeSync';
 import { RuntimeManager } from './runtimeManager';
@@ -69,6 +70,7 @@ let decorationManager: DecorationManager | undefined;
 let statusBar: StatusBar | undefined;
 let operatorTreeProvider: OperatorTreeProvider | undefined;
 let performancePanelProvider: PerformancePanelProvider | undefined;
+let windowControlsPanelProvider: WindowControlsPanelProvider | undefined;
 let nodeInspectorPanel: NodeInspectorPanel | undefined;
 let chainCodeSync: ChainCodeSync | undefined;
 let operatorCatalog: OperatorCatalog | undefined;
@@ -88,6 +90,15 @@ export function activate(context: vscode.ExtensionContext) {
     // Initialize runtime manager for download-on-demand
     runtimeManager = new RuntimeManager(outputChannel);
     runtimeManager.setExtensionPath(context.extensionPath);
+
+    // Check vivid setup (onboarding for new users)
+    // This runs async and doesn't block activation
+    checkVividSetup(context).then((configured) => {
+        if (configured) {
+            outputChannel.appendLine('Vivid source path configured');
+        }
+    });
+
     // Install MCP server (if not already installed or needs update)
     runtimeManager.installMcpServer();
 
@@ -112,6 +123,23 @@ export function activate(context: vscode.ExtensionContext) {
             performancePanelProvider
         )
     );
+
+    // Register window controls panel
+    windowControlsPanelProvider = new WindowControlsPanelProvider(context.extensionUri);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(
+            WindowControlsPanelProvider.viewType,
+            windowControlsPanelProvider
+        )
+    );
+
+    // Wire up window controls callback
+    windowControlsPanelProvider.setWindowControlHandler((setting, value) => {
+        if (runtimeClient) {
+            runtimeClient.sendWindowControl(setting, value);
+            outputChannel.appendLine(`Window control: ${setting} = ${value}`);
+        }
+    });
 
     // Register node inspector panel
     nodeInspectorPanel = new NodeInspectorPanel(context.extensionUri);
@@ -292,7 +320,8 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('vivid.addOperator', () => addOperator()),
         vscode.commands.registerCommand('vivid.refreshOperatorLibrary', () => refreshOperatorLibrary()),
         vscode.commands.registerCommand('vivid.manageAddons', () => manageAddons()),
-        vscode.commands.registerCommand('vivid.bundleProject', () => bundleProject())
+        vscode.commands.registerCommand('vivid.bundleProject', () => bundleProject()),
+        vscode.commands.registerCommand('vivid.createOperatorTemplate', () => createOperatorTemplate())
     );
 
     // Watch for editor changes
@@ -353,6 +382,65 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
     context.subscriptions.push(chainFileWatcher);
+
+    // CLAUDE.md token limit warning
+    // Claude has a 200K token context window, but CLAUDE.md should be concise
+    // to leave room for code, conversation, and tool outputs
+    const CLAUDE_MD_TOKEN_WARNING_THRESHOLD = 8000;  // ~32KB of text
+    const CLAUDE_MD_TOKEN_LIMIT = 16000;  // ~64KB - strongly discouraged
+
+    function estimateTokens(text: string): number {
+        // Rough estimate: ~4 characters per token for English text
+        // This is a conservative estimate; actual tokenization varies
+        return Math.ceil(text.length / 4);
+    }
+
+    function checkClaudeMdSize(uri: vscode.Uri) {
+        try {
+            const content = fs.readFileSync(uri.fsPath, 'utf8');
+            const estimatedTokens = estimateTokens(content);
+            const fileName = path.basename(uri.fsPath);
+
+            if (estimatedTokens > CLAUDE_MD_TOKEN_LIMIT) {
+                vscode.window.showErrorMessage(
+                    `${fileName} is very large (~${estimatedTokens.toLocaleString()} tokens). ` +
+                    `Claude's context window is limited. Consider splitting into multiple files or condensing.`,
+                    'Open File'
+                ).then(choice => {
+                    if (choice === 'Open File') {
+                        vscode.window.showTextDocument(uri);
+                    }
+                });
+            } else if (estimatedTokens > CLAUDE_MD_TOKEN_WARNING_THRESHOLD) {
+                vscode.window.showWarningMessage(
+                    `${fileName} is getting large (~${estimatedTokens.toLocaleString()} tokens). ` +
+                    `Consider keeping it concise to leave context for code and conversation.`,
+                    'Open File'
+                ).then(choice => {
+                    if (choice === 'Open File') {
+                        vscode.window.showTextDocument(uri);
+                    }
+                });
+            }
+        } catch (e) {
+            // Ignore read errors
+        }
+    }
+
+    // Watch for CLAUDE.md file saves
+    const claudeMdWatcher = vscode.workspace.createFileSystemWatcher('**/CLAUDE.md');
+    claudeMdWatcher.onDidChange(checkClaudeMdSize);
+    claudeMdWatcher.onDidCreate(checkClaudeMdSize);
+    context.subscriptions.push(claudeMdWatcher);
+
+    // Also check on save for files already open
+    context.subscriptions.push(
+        vscode.workspace.onDidSaveTextDocument(document => {
+            if (document.fileName.endsWith('CLAUDE.md')) {
+                checkClaudeMdSize(document.uri);
+            }
+        })
+    );
 
     // HTTP server for Claude Code hook integration
     // Allows pre-edit hooks to check if chain.cpp has unsaved changes
@@ -495,9 +583,9 @@ export function activate(context: vscode.ExtensionContext) {
         });
     }
 
-    // Check for updates on startup if enabled (skip in dev mode)
-    const customRuntimePath = config.get<string>('runtimePath');
-    if (!customRuntimePath && config.get<boolean>('checkUpdatesOnStart') && runtimeManager?.isInstalled()) {
+    // Check for updates on startup if enabled (skip in dev mode when vividRoot is set)
+    const isDevMode = !!runtimeManager?.getVividRoot();
+    if (!isDevMode && config.get<boolean>('checkUpdatesOnStart') && runtimeManager?.isInstalled()) {
         // Delay the check slightly to not slow down activation
         setTimeout(() => {
             runtimeManager?.checkForUpdates();
@@ -511,6 +599,341 @@ export function activate(context: vscode.ExtensionContext) {
     }, 3000);
 
     context.subscriptions.push(outputChannel, statusBar);
+}
+
+// ============================================================================
+// Vivid Setup / Onboarding
+// ============================================================================
+
+/**
+ * Check if a directory is a valid vivid source root
+ */
+function isValidVividRoot(dir: string): boolean {
+    return fs.existsSync(path.join(dir, 'core')) &&
+           fs.existsSync(path.join(dir, 'examples')) &&
+           fs.existsSync(path.join(dir, 'CMakeLists.txt'));
+}
+
+/**
+ * Save the vivid root to VS Code settings
+ */
+async function saveVividRoot(vividRoot: string): Promise<void> {
+    const config = vscode.workspace.getConfiguration('vivid');
+    await config.update('vividRoot', vividRoot, vscode.ConfigurationTarget.Global);
+    outputChannel?.appendLine(`Vivid root set to: ${vividRoot}`);
+}
+
+/**
+ * Ensure the projects folder structure exists
+ */
+async function ensureProjectsStructure(vividRoot: string): Promise<void> {
+    const projectsDir = path.join(vividRoot, 'projects');
+    const myProjectsDir = path.join(projectsDir, 'my-projects');
+    const examplesWorkDir = path.join(projectsDir, 'examples');
+
+    // Create projects directory
+    if (!fs.existsSync(projectsDir)) {
+        fs.mkdirSync(projectsDir, { recursive: true });
+        outputChannel?.appendLine(`Created projects directory: ${projectsDir}`);
+    }
+
+    // Create my-projects directory with .gitignore
+    if (!fs.existsSync(myProjectsDir)) {
+        fs.mkdirSync(myProjectsDir, { recursive: true });
+        fs.writeFileSync(
+            path.join(myProjectsDir, '.gitignore'),
+            '# User projects - not tracked in vivid repo\n*\n!.gitignore\n'
+        );
+        outputChannel?.appendLine(`Created my-projects directory: ${myProjectsDir}`);
+    }
+
+    // Copy examples for user modification (if not already done)
+    if (!fs.existsSync(examplesWorkDir)) {
+        const sourceExamples = path.join(vividRoot, 'examples');
+        if (fs.existsSync(sourceExamples)) {
+            await copyDirectory(sourceExamples, examplesWorkDir);
+            fs.writeFileSync(
+                path.join(examplesWorkDir, 'README.md'),
+                '# Working Examples\n\nThese are copies of the original examples that you can modify.\nOriginals are in `../examples/` (read-only reference).\n'
+            );
+            outputChannel?.appendLine(`Copied examples to: ${examplesWorkDir}`);
+        }
+    }
+}
+
+/**
+ * Recursively copy a directory
+ */
+async function copyDirectory(src: string, dest: string): Promise<void> {
+    fs.mkdirSync(dest, { recursive: true });
+    const entries = fs.readdirSync(src, { withFileTypes: true });
+
+    for (const entry of entries) {
+        const srcPath = path.join(src, entry.name);
+        const destPath = path.join(dest, entry.name);
+
+        if (entry.isDirectory()) {
+            await copyDirectory(srcPath, destPath);
+        } else {
+            fs.copyFileSync(srcPath, destPath);
+        }
+    }
+}
+
+/**
+ * Let user select an existing vivid checkout
+ */
+async function selectExistingVividPath(): Promise<boolean> {
+    const result = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        title: 'Select Vivid Source Directory',
+        openLabel: 'Select Vivid Root'
+    });
+
+    if (result && result.length > 0) {
+        const selectedPath = result[0].fsPath;
+        if (isValidVividRoot(selectedPath)) {
+            await saveVividRoot(selectedPath);
+            await ensureProjectsStructure(selectedPath);
+            vscode.window.showInformationMessage(`Vivid configured at: ${selectedPath}`);
+            return true;
+        } else {
+            vscode.window.showErrorMessage(
+                'Invalid Vivid directory. Please select a folder containing core/, examples/, and CMakeLists.txt'
+            );
+        }
+    }
+    return false;
+}
+
+/**
+ * Clone vivid from GitHub to user-selected location
+ */
+async function cloneVividFromGitHub(): Promise<boolean> {
+    // Ask where to clone
+    const result = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        title: 'Select Parent Directory for Vivid',
+        openLabel: 'Clone Here'
+    });
+
+    if (!result || result.length === 0) {
+        return false;
+    }
+
+    const parentDir = result[0].fsPath;
+    const vividDir = path.join(parentDir, 'vivid');
+
+    // Check if vivid folder already exists
+    if (fs.existsSync(vividDir)) {
+        const overwrite = await vscode.window.showWarningMessage(
+            `A 'vivid' folder already exists at ${parentDir}. Use it anyway?`,
+            'Use Existing',
+            'Cancel'
+        );
+        if (overwrite === 'Use Existing' && isValidVividRoot(vividDir)) {
+            await saveVividRoot(vividDir);
+            await ensureProjectsStructure(vividDir);
+            return true;
+        }
+        return false;
+    }
+
+    // Clone repository with progress
+    return vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: 'Cloning Vivid from GitHub...',
+        cancellable: false
+    }, async (progress) => {
+        progress.report({ message: 'This may take a minute...' });
+
+        return new Promise<boolean>((resolve) => {
+            const git = spawn('git', ['clone', '--depth', '1', 'https://github.com/seethroughlab/vivid.git', vividDir]);
+
+            let stderr = '';
+            git.stderr.on('data', (data) => {
+                stderr += data.toString();
+                // Git outputs progress to stderr
+                const match = data.toString().match(/(\d+)%/);
+                if (match) {
+                    progress.report({ message: `Cloning... ${match[1]}%` });
+                }
+            });
+
+            git.on('close', async (code) => {
+                if (code === 0) {
+                    await saveVividRoot(vividDir);
+                    await ensureProjectsStructure(vividDir);
+                    vscode.window.showInformationMessage(`Vivid cloned to: ${vividDir}`);
+                    resolve(true);
+                } else {
+                    vscode.window.showErrorMessage(`Failed to clone Vivid: ${stderr}`);
+                    resolve(false);
+                }
+            });
+
+            git.on('error', (err) => {
+                vscode.window.showErrorMessage(`Git not found. Please install git and try again. Error: ${err.message}`);
+                resolve(false);
+            });
+        });
+    });
+}
+
+/**
+ * Check if user has legacy ~/.vivid installation
+ */
+function hasLegacyInstallation(): boolean {
+    const legacyDir = path.join(os.homedir(), '.vivid');
+    const legacyBinary = path.join(legacyDir, 'bin', process.platform === 'win32' ? 'vivid.exe' : 'vivid');
+    return fs.existsSync(legacyBinary);
+}
+
+/**
+ * Check if vivid is set up, prompt for setup if not
+ */
+async function checkVividSetup(context: vscode.ExtensionContext): Promise<boolean> {
+    const config = vscode.workspace.getConfiguration('vivid');
+    const vividRoot = config.get<string>('vividRoot');
+
+    // If vividRoot is set and valid, we're configured
+    if (vividRoot && isValidVividRoot(vividRoot)) {
+        // Update runtime manager with vivid root
+        runtimeManager?.setVividRoot(vividRoot);
+        return true;
+    }
+
+    // Check if this is a fresh install or if user dismissed before
+    const setupDismissed = context.globalState.get<boolean>('vivid.setupDismissed');
+    if (setupDismissed) {
+        return false;
+    }
+
+    // Check for legacy installation - offer migration
+    if (hasLegacyInstallation()) {
+        const migrationChoice = await vscode.window.showInformationMessage(
+            'Vivid has a new setup that gives Claude Code access to source code for better AI assistance. Would you like to upgrade?',
+            'Set Up Now',
+            'Keep Old Setup',
+            'Learn More'
+        );
+
+        if (migrationChoice === 'Set Up Now') {
+            // Same flow as new user - point to existing or clone
+            const setupChoice = await vscode.window.showQuickPick([
+                {
+                    label: 'Point to Existing Checkout',
+                    description: 'I already have the vivid source code cloned'
+                },
+                {
+                    label: 'Clone from GitHub',
+                    description: 'Download the source code automatically'
+                }
+            ], {
+                placeHolder: 'How would you like to set up Vivid source access?',
+                title: 'Vivid Source Setup'
+            });
+
+            if (setupChoice?.label === 'Point to Existing Checkout') {
+                const success = await selectExistingVividPath();
+                if (success) {
+                    await promptForBinaryDownload();
+                    await reconfigureMcp();
+                }
+                return success;
+            } else if (setupChoice?.label === 'Clone from GitHub') {
+                const success = await cloneVividFromGitHub();
+                if (success) {
+                    await promptForBinaryDownload();
+                    await reconfigureMcp();
+                }
+                return success;
+            }
+        } else if (migrationChoice === 'Keep Old Setup') {
+            // Remember that user wants to keep old setup
+            await context.globalState.update('vivid.setupDismissed', true);
+            outputChannel?.appendLine('Keeping legacy ~/.vivid setup');
+            return false;
+        } else if (migrationChoice === 'Learn More') {
+            vscode.env.openExternal(vscode.Uri.parse(
+                'https://github.com/seethroughlab/vivid-vscode#source-code-access'
+            ));
+        }
+
+        return false;
+    }
+
+    // New user - show onboarding dialog
+    const choice = await vscode.window.showInformationMessage(
+        'Welcome to Vivid! To get the best experience (including AI assistance), we need access to the Vivid source code.',
+        'Point to Existing Checkout',
+        'Clone from GitHub',
+        'Later'
+    );
+
+    if (choice === 'Point to Existing Checkout') {
+        const success = await selectExistingVividPath();
+        if (success) {
+            await promptForBinaryDownload();
+        }
+        return success;
+    } else if (choice === 'Clone from GitHub') {
+        const success = await cloneVividFromGitHub();
+        if (success) {
+            await promptForBinaryDownload();
+        }
+        return success;
+    } else if (choice === 'Later') {
+        // Remember that user dismissed, don't ask again this session
+        await context.globalState.update('vivid.setupDismissed', true);
+    }
+
+    return false;
+}
+
+/**
+ * Reconfigure MCP after migration to new workflow
+ */
+async function reconfigureMcp(): Promise<void> {
+    const { configureVividMcp } = await import('./mcpConfigChecker');
+    const success = await configureVividMcp();
+    if (success) {
+        vscode.window.showInformationMessage(
+            'Vivid MCP updated. Restart Claude Code for AI to access source documentation.'
+        );
+    }
+}
+
+/**
+ * Prompt user to download binary if not present
+ */
+async function promptForBinaryDownload(): Promise<void> {
+    const config = vscode.workspace.getConfiguration('vivid');
+    const vividRoot = config.get<string>('vividRoot');
+
+    if (!vividRoot || !runtimeManager) {
+        return;
+    }
+
+    // Check if binary exists
+    const binaryPath = path.join(vividRoot, 'build', 'bin', process.platform === 'win32' ? 'vivid.exe' : 'vivid');
+    if (fs.existsSync(binaryPath)) {
+        return; // Binary already exists
+    }
+
+    const choice = await vscode.window.showInformationMessage(
+        'Vivid runtime binary not found. Download now? (No build required)',
+        'Download',
+        'Later'
+    );
+
+    if (choice === 'Download') {
+        await runtimeManager.installOrUpdate();
+    }
 }
 
 function connectToRuntime() {
@@ -609,6 +1032,10 @@ function connectToRuntime() {
         if (state.active) {
             vscode.window.setStatusBarMessage(`$(eye) Solo: ${state.operator}`, 3000);
         }
+    });
+
+    runtimeClient.onWindowState((state: WindowState) => {
+        windowControlsPanelProvider?.updateState(state);
     });
 
     runtimeClient.onError((error) => {
@@ -729,37 +1156,24 @@ async function startRuntime(_context: vscode.ExtensionContext) {
         return;
     }
 
-    // Check for custom runtime path (for development/manual installs)
-    const config = vscode.workspace.getConfiguration('vivid');
-    const customPath = config.get<string>('runtimePath');
+    if (!runtimeManager) {
+        vscode.window.showErrorMessage('Runtime manager not initialized');
+        return;
+    }
 
-    let execPath: string;
-    let env = process.env;
+    // Ensure runtime is available
+    const installed = await runtimeManager.ensureInstalled();
+    if (!installed) {
+        return;
+    }
 
-    if (customPath) {
-        // Development mode: use custom path, skip all download logic
-        if (!fs.existsSync(customPath)) {
-            vscode.window.showErrorMessage(`Custom runtime not found: ${customPath}`);
-            return;
-        }
-        execPath = customPath;
-        outputChannel.appendLine(`Using development runtime: ${customPath}`);
-        statusBar?.setDevMode(true);
-    } else {
-        // Production mode: use RuntimeManager for download/updates
-        if (!runtimeManager) {
-            vscode.window.showErrorMessage('Runtime manager not initialized');
-            return;
-        }
+    const execPath = runtimeManager.executablePath;
+    const env = runtimeManager.getEnvironment();
+    const isDevMode = !!runtimeManager.getVividRoot();
+    statusBar?.setDevMode(isDevMode);
 
-        const installed = await runtimeManager.ensureInstalled();
-        if (!installed) {
-            return;
-        }
-
-        execPath = runtimeManager.executablePath;
-        env = runtimeManager.getEnvironment();
-        statusBar?.setDevMode(false);
+    if (isDevMode) {
+        outputChannel.appendLine(`Using development runtime: ${execPath}`);
     }
 
     // Stop existing runtime if running
@@ -1053,19 +1467,65 @@ async function createProject(context: vscode.ExtensionContext) {
     });
 
     // Step 4: Select parent directory
-    const folderUri = await vscode.window.showOpenDialog({
-        canSelectFiles: false,
-        canSelectFolders: true,
-        canSelectMany: false,
-        openLabel: 'Select Parent Folder',
-        title: 'Where do you want to create the project?'
-    });
+    // Default to projects/my-projects if vividRoot is configured
+    const config = vscode.workspace.getConfiguration('vivid');
+    const vividRoot = config.get<string>('vividRoot');
+    const defaultProjectsPath = vividRoot ? path.join(vividRoot, 'projects', 'my-projects') : undefined;
 
-    if (!folderUri || folderUri.length === 0) {
-        return; // User cancelled
+    let parentPath: string;
+
+    if (defaultProjectsPath && fs.existsSync(defaultProjectsPath)) {
+        // Offer quick pick between default location and custom
+        const locationChoice = await vscode.window.showQuickPick([
+            {
+                label: 'My Projects',
+                description: defaultProjectsPath,
+                detail: 'Recommended - inside your Vivid installation'
+            },
+            {
+                label: 'Choose Location...',
+                description: 'Select a different folder'
+            }
+        ], {
+            placeHolder: 'Where do you want to create the project?',
+            title: 'Project Location'
+        });
+
+        if (!locationChoice) {
+            return; // User cancelled
+        }
+
+        if (locationChoice.label === 'My Projects') {
+            parentPath = defaultProjectsPath;
+        } else {
+            const folderUri = await vscode.window.showOpenDialog({
+                canSelectFiles: false,
+                canSelectFolders: true,
+                canSelectMany: false,
+                openLabel: 'Select Parent Folder',
+                title: 'Where do you want to create the project?'
+            });
+
+            if (!folderUri || folderUri.length === 0) {
+                return; // User cancelled
+            }
+            parentPath = folderUri[0].fsPath;
+        }
+    } else {
+        // No vividRoot configured - use folder picker
+        const folderUri = await vscode.window.showOpenDialog({
+            canSelectFiles: false,
+            canSelectFolders: true,
+            canSelectMany: false,
+            openLabel: 'Select Parent Folder',
+            title: 'Where do you want to create the project?'
+        });
+
+        if (!folderUri || folderUri.length === 0) {
+            return; // User cancelled
+        }
+        parentPath = folderUri[0].fsPath;
     }
-
-    const parentPath = folderUri[0].fsPath;
     const projectPath = `${parentPath}/${projectName}`;
 
     // Build command arguments
@@ -1080,8 +1540,7 @@ async function createProject(context: vscode.ExtensionContext) {
     outputChannel.appendLine(`In directory: ${parentPath}`);
     outputChannel.show();
 
-    // Execute vivid new command
-    const vividPath = runtimeManager.executablePath;
+    const vividExecPath = runtimeManager.executablePath;
 
     await vscode.window.withProgress({
         location: vscode.ProgressLocation.Notification,
@@ -1089,7 +1548,7 @@ async function createProject(context: vscode.ExtensionContext) {
         cancellable: false
     }, async () => {
         return new Promise<void>((resolve, reject) => {
-            const proc = spawn(vividPath, args, {
+            const proc = spawn(vividExecPath, args, {
                 cwd: parentPath,
                 stdio: ['ignore', 'pipe', 'pipe']
             });
@@ -1114,17 +1573,22 @@ async function createProject(context: vscode.ExtensionContext) {
                     // Create .vscode/c_cpp_properties.json for IntelliSense
                     const vscodeDir = `${projectPath}/.vscode`;
                     const cppPropertiesPath = `${vscodeDir}/c_cpp_properties.json`;
-                    const homeDir = process.env.HOME || process.env.USERPROFILE || '';
                     const platformName = process.platform === 'darwin' ? 'Mac' : process.platform === 'win32' ? 'Win32' : 'Linux';
+
+                    // Use source include path if vividRoot is configured, otherwise fallback
+                    const includePaths: string[] = ['${workspaceFolder}/**'];
+                    if (runtimeManager?.includePath) {
+                        includePaths.push(runtimeManager.includePath);
+                    } else {
+                        const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+                        includePaths.push(`${homeDir}/.vivid/include`);
+                    }
 
                     const cppProperties = {
                         configurations: [
                             {
                                 name: platformName,
-                                includePath: [
-                                    '${workspaceFolder}/**',
-                                    `${homeDir}/.vivid/include`
-                                ],
+                                includePath: includePaths,
                                 cStandard: 'c17',
                                 cppStandard: 'c++17'
                             }
@@ -1167,25 +1631,14 @@ async function refreshOperatorLibrary() {
         return;
     }
 
-    // Get runtime path
-    const config = vscode.workspace.getConfiguration('vivid');
-    const customPath = config.get<string>('runtimePath');
-    let runtimePath: string | undefined;
-
-    if (customPath) {
-        runtimePath = customPath;
-    } else if (runtimeManager?.isInstalled()) {
-        runtimePath = runtimeManager.executablePath;
-    }
-
-    if (!runtimePath) {
+    if (!runtimeManager?.isInstalled()) {
         operatorLibraryPanel.setLoadError('Vivid runtime not found');
         return;
     }
 
     operatorLibraryPanel.setLoading(true);
 
-    const loaded = await operatorCatalog.loadFromRuntime(runtimePath);
+    const loaded = await operatorCatalog.loadFromRuntime(runtimeManager.executablePath);
 
     if (loaded) {
         operatorLibraryPanel.setCatalog(operatorCatalog);
@@ -1200,21 +1653,12 @@ async function addOperator() {
         return;
     }
 
-    // Get runtime path to load catalog
-    const config = vscode.workspace.getConfiguration('vivid');
-    const customPath = config.get<string>('runtimePath');
-    let runtimePath: string | undefined;
-
-    if (customPath) {
-        runtimePath = customPath;
-    } else if (runtimeManager?.isInstalled()) {
-        runtimePath = runtimeManager.executablePath;
-    }
-
-    if (!runtimePath) {
+    if (!runtimeManager?.isInstalled()) {
         vscode.window.showErrorMessage('Vivid runtime not found. Please install the runtime first.');
         return;
     }
+
+    const runtimePath = runtimeManager.executablePath;
 
     // Load catalog if not already loaded
     if (!operatorCatalog.isLoaded()) {
@@ -1319,24 +1763,15 @@ async function manageAddons() {
         return;
     }
 
-    // Get runtime path
-    const config = vscode.workspace.getConfiguration('vivid');
-    const customPath = config.get<string>('runtimePath');
-
-    if (customPath) {
-        addonManager.setRuntimePath(customPath);
-    } else if (runtimeManager?.isInstalled()) {
-        addonManager.setRuntimePath(runtimeManager.executablePath);
-    } else {
-        // Try to ensure runtime is installed
+    if (!runtimeManager?.isInstalled()) {
         const installed = await runtimeManager?.ensureInstalled();
         if (!installed) {
             vscode.window.showErrorMessage('Vivid runtime not found. Please install it first.');
             return;
         }
-        addonManager.setRuntimePath(runtimeManager!.executablePath);
     }
 
+    addonManager.setRuntimePath(runtimeManager!.executablePath);
     await showAddonManager(addonManager);
 }
 
@@ -1362,23 +1797,15 @@ async function bundleProject() {
         return;
     }
 
-    // Get runtime path
-    const config = vscode.workspace.getConfiguration('vivid');
-    const customPath = config.get<string>('runtimePath');
-    let execPath: string;
-
-    if (customPath) {
-        execPath = customPath;
-    } else if (runtimeManager?.isInstalled()) {
-        execPath = runtimeManager.executablePath;
-    } else {
+    if (!runtimeManager?.isInstalled()) {
         const installed = await runtimeManager?.ensureInstalled();
         if (!installed) {
             vscode.window.showErrorMessage('Vivid runtime not found. Please install it first.');
             return;
         }
-        execPath = runtimeManager!.executablePath;
     }
+
+    const execPath = runtimeManager!.executablePath;
 
     // Get app name from user
     const projectName = path.basename(projectPath);
@@ -1480,6 +1907,496 @@ async function bundleProject() {
     } else if (action === 'Run App') {
         spawn('open', [outputPath]);
     }
+}
+
+async function createOperatorTemplate() {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders) {
+        vscode.window.showErrorMessage('No workspace folder open');
+        return;
+    }
+
+    // Step 1: Get operator name
+    const operatorName = await vscode.window.showInputBox({
+        prompt: 'Enter operator name (e.g., MyEffect, ColorShift)',
+        placeHolder: 'MyCustomOperator',
+        validateInput: (value) => {
+            if (!value || value.trim().length === 0) {
+                return 'Operator name is required';
+            }
+            if (!/^[A-Z][a-zA-Z0-9]*$/.test(value)) {
+                return 'Operator name must be PascalCase (start with uppercase, letters/numbers only)';
+            }
+            return undefined;
+        }
+    });
+
+    if (!operatorName) {
+        return; // User cancelled
+    }
+
+    // Step 2: Select operator type
+    const operatorTypes = [
+        { label: 'Shader Effect', description: 'Process input texture with WGSL shader (most common)' },
+        { label: 'Shader Generator', description: 'Generate textures from scratch (noise, gradients, shapes)' },
+        { label: 'Value/Modulator', description: 'Output scalar values for animation/modulation' },
+        { label: 'Audio Synth', description: 'Generate or process audio (requires vivid-audio)' },
+        { label: 'Audio Analyzer', description: 'Extract values from audio (RMS, spectrum, beats)' }
+    ];
+
+    const selectedType = await vscode.window.showQuickPick(operatorTypes, {
+        placeHolder: 'Select operator type',
+        title: 'Operator Type'
+    });
+
+    if (!selectedType) {
+        return; // User cancelled
+    }
+
+    // Step 3: Create operators directory if it doesn't exist
+    const projectPath = workspaceFolders[0].uri.fsPath;
+    const operatorsDir = path.join(projectPath, 'operators');
+
+    if (!fs.existsSync(operatorsDir)) {
+        fs.mkdirSync(operatorsDir, { recursive: true });
+    }
+
+    // Step 4: Generate template code
+    const fileName = `${operatorName.charAt(0).toLowerCase()}${operatorName.slice(1)}.h`;
+    const filePath = path.join(operatorsDir, fileName);
+
+    if (fs.existsSync(filePath)) {
+        const overwrite = await vscode.window.showWarningMessage(
+            `${fileName} already exists. Overwrite?`,
+            'Overwrite',
+            'Cancel'
+        );
+        if (overwrite !== 'Overwrite') {
+            return;
+        }
+    }
+
+    const template = generateOperatorTemplate(operatorName, selectedType.label);
+    fs.writeFileSync(filePath, template);
+
+    // Step 5: Open the new file
+    const doc = await vscode.workspace.openTextDocument(filePath);
+    await vscode.window.showTextDocument(doc);
+
+    // Step 6: Show next steps
+    const includeCode = `#include "operators/${fileName}"`;
+    const usageCode = `chain.add<${operatorName}>("my${operatorName}");`;
+
+    vscode.window.showInformationMessage(
+        `Created ${fileName}. Add to chain.cpp: ${includeCode}`,
+        'Copy Include'
+    ).then(action => {
+        if (action === 'Copy Include') {
+            vscode.env.clipboard.writeText(includeCode);
+            vscode.window.setStatusBarMessage('$(check) Include copied to clipboard', 3000);
+        }
+    });
+
+    outputChannel.appendLine(`Created custom operator template: ${filePath}`);
+    outputChannel.appendLine(`To use: ${includeCode}`);
+    outputChannel.appendLine(`Then: ${usageCode}`);
+}
+
+function generateOperatorTemplate(name: string, templateType: string): string {
+    const uniformsName = `${name}Uniforms`;
+
+    if (templateType === 'Shader Effect') {
+        return `#pragma once
+
+#include <vivid/vivid.h>
+#include <vivid/effects/simple_texture_effect.h>
+
+using namespace vivid;
+using namespace vivid::effects;
+
+/**
+ * @brief Uniform buffer for ${name}
+ *
+ * WGSL alignment rules: floats pack into vec4s
+ * Add padding to reach 16-byte boundaries
+ */
+struct ${uniformsName} {
+    float intensity;
+    float time;
+    float _pad[2];  // Padding to 16 bytes
+};
+
+/**
+ * @brief ${name} - Custom shader effect
+ *
+ * Processes input texture through a WGSL fragment shader.
+ * Uses the SimpleTextureEffect CRTP pattern for automatic
+ * pipeline setup and uniform buffer management.
+ */
+class ${name} : public SimpleTextureEffect<${name}, ${uniformsName}> {
+public:
+    // Parameters (exposed to UI and code)
+    Param<float> intensity{"intensity", 1.0f, 0.0f, 2.0f};
+
+    /**
+     * @brief Return uniform values for the shader
+     * Called each frame before rendering
+     */
+    ${uniformsName} getUniforms() const {
+        return {
+            static_cast<float>(intensity),
+            m_time,
+            {0, 0}
+        };
+    }
+
+    void process(Context& ctx) override {
+        m_time = ctx.time();
+        SimpleTextureEffect::process(ctx);
+    }
+
+    std::string name() const override { return "${name}"; }
+
+protected:
+    /**
+     * @brief WGSL fragment shader source
+     *
+     * Available bindings:
+     * - @group(0) @binding(0) var<uniform> uniforms: ${uniformsName}
+     * - @group(0) @binding(1) var inputTex: texture_2d<f32>
+     * - @group(0) @binding(2) var texSampler: sampler
+     */
+    const char* fragmentShader() const override {
+        return R"(
+struct Uniforms {
+    intensity: f32,
+    time: f32,
+    _pad1: f32,
+    _pad2: f32
+};
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var inputTex: texture_2d<f32>;
+@group(0) @binding(2) var texSampler: sampler;
+
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f
+};
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+    let color = textureSample(inputTex, texSampler, input.uv);
+
+    // Example: intensity-based color adjustment
+    return vec4f(color.rgb * uniforms.intensity, color.a);
+}
+        )";
+    }
+
+private:
+    float m_time = 0.0f;
+};
+`;
+    } else if (templateType === 'Shader Generator') {
+        return `#pragma once
+
+#include <vivid/vivid.h>
+#include <vivid/effects/simple_texture_effect.h>
+
+using namespace vivid;
+using namespace vivid::effects;
+
+/**
+ * @brief Uniform buffer for ${name}
+ */
+struct ${uniformsName} {
+    float time;
+    float speed;
+    float scale;
+    float _pad;
+};
+
+/**
+ * @brief ${name} - Custom texture generator
+ *
+ * Generates textures from scratch using WGSL shaders.
+ * Uses the SimpleGeneratorEffect CRTP pattern (no input texture).
+ */
+class ${name} : public SimpleGeneratorEffect<${name}, ${uniformsName}> {
+public:
+    // Parameters
+    Param<float> speed{"speed", 1.0f, 0.0f, 10.0f};
+    Param<float> scale{"scale", 4.0f, 0.1f, 20.0f};
+
+    /**
+     * @brief Return uniform values for the shader
+     */
+    ${uniformsName} getUniforms() const {
+        return {
+            m_time,
+            static_cast<float>(speed),
+            static_cast<float>(scale),
+            0
+        };
+    }
+
+    void process(Context& ctx) override {
+        m_time = ctx.time();
+        SimpleGeneratorEffect::process(ctx);
+    }
+
+    std::string name() const override { return "${name}"; }
+
+protected:
+    /**
+     * @brief WGSL fragment shader source
+     *
+     * Available bindings:
+     * - @group(0) @binding(0) var<uniform> uniforms: ${uniformsName}
+     * - @group(0) @binding(1) var texSampler: sampler
+     */
+    const char* fragmentShader() const override {
+        return R"(
+struct Uniforms {
+    time: f32,
+    speed: f32,
+    scale: f32,
+    _pad: f32
+};
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var texSampler: sampler;
+
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f
+};
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+    let t = uniforms.time * uniforms.speed;
+    let uv = input.uv * uniforms.scale;
+
+    // Example: animated gradient pattern
+    let r = sin(uv.x + t) * 0.5 + 0.5;
+    let g = sin(uv.y + t * 1.3) * 0.5 + 0.5;
+    let b = sin(uv.x + uv.y + t * 0.7) * 0.5 + 0.5;
+
+    return vec4f(r, g, b, 1.0);
+}
+        )";
+    }
+
+private:
+    float m_time = 0.0f;
+};
+`;
+    } else if (templateType === 'Value/Modulator') {
+        return `#pragma once
+
+#include <vivid/vivid.h>
+
+using namespace vivid;
+
+/**
+ * @brief ${name} - Custom value modulator
+ *
+ * Outputs scalar values that can be used to modulate
+ * other operators' parameters. Similar to an LFO.
+ *
+ * @par Usage
+ * @code
+ * auto& mod = chain.add<${name}>("mod");
+ * mod.frequency = 2.0f;
+ *
+ * // In update():
+ * float value = chain.get<${name}>("mod").outputValue();
+ * chain.get<Blur>("blur").radius = value * 10.0f;
+ * @endcode
+ */
+class ${name} : public Operator {
+public:
+    // Parameters
+    Param<float> frequency{"frequency", 1.0f, 0.01f, 20.0f};
+    Param<float> amplitude{"amplitude", 1.0f, 0.0f, 2.0f};
+    Param<float> offset{"offset", 0.0f, -1.0f, 1.0f};
+
+    void init(Context& ctx) override {
+        m_phase = 0.0f;
+    }
+
+    void process(Context& ctx) override {
+        float t = ctx.time();
+        float freq = static_cast<float>(frequency);
+        float amp = static_cast<float>(amplitude);
+        float off = static_cast<float>(offset);
+
+        // Sine wave oscillator
+        m_outputValue = std::sin(t * freq * 2.0f * 3.14159f) * amp + off;
+    }
+
+    void cleanup() override {}
+
+    std::string name() const override { return "${name}"; }
+
+    // Value output
+    OutputKind outputKind() const override { return OutputKind::Value; }
+
+    /**
+     * @brief Get the current output value
+     * @return Value in range [offset - amplitude, offset + amplitude]
+     */
+    float outputValue() const { return m_outputValue; }
+
+private:
+    float m_phase = 0.0f;
+    float m_outputValue = 0.0f;
+};
+`;
+    } else if (templateType === 'Audio Synth') {
+        return `#pragma once
+
+#include <vivid/vivid.h>
+#include <vivid/audio/audio.h>
+
+using namespace vivid;
+using namespace vivid::audio;
+
+/**
+ * @brief ${name} - Custom audio synthesizer
+ *
+ * Generates or processes audio samples. Requires the vivid-audio addon.
+ *
+ * @par Usage
+ * @code
+ * chain.add<${name}>("synth")
+ *     .frequency(440.0f)
+ *     .gain(0.5f);
+ * @endcode
+ */
+class ${name} : public AudioOperator {
+public:
+    // Parameters
+    Param<float> gain{"gain", 0.5f, 0.0f, 1.0f};
+    Param<float> frequency{"frequency", 440.0f, 20.0f, 20000.0f};
+
+    void initAudio(Context& ctx, uint32_t sampleRate, uint32_t bufferSize) override {
+        m_sampleRate = static_cast<float>(sampleRate);
+        m_phase = 0.0f;
+    }
+
+    void processAudio(Context& ctx, AudioBuffer& output) override {
+        float freq = static_cast<float>(frequency);
+        float g = static_cast<float>(gain);
+        float phaseIncrement = freq / m_sampleRate;
+
+        for (uint32_t i = 0; i < output.frames; i++) {
+            // Simple sine wave oscillator
+            float sample = std::sin(m_phase * 2.0f * 3.14159f) * g;
+
+            output.left[i] = sample;
+            output.right[i] = sample;
+
+            m_phase += phaseIncrement;
+            if (m_phase >= 1.0f) m_phase -= 1.0f;
+        }
+    }
+
+    void cleanupAudio() override {}
+
+    std::string name() const override { return "${name}"; }
+
+private:
+    float m_sampleRate = 44100.0f;
+    float m_phase = 0.0f;
+};
+`;
+    } else if (templateType === 'Audio Analyzer') {
+        return `#pragma once
+
+#include <vivid/vivid.h>
+#include <vivid/audio/audio_analyzer.h>
+#include <cmath>
+
+using namespace vivid;
+using namespace vivid::audio;
+
+/**
+ * @brief ${name} - Custom audio analyzer
+ *
+ * Extracts values from audio for visual modulation.
+ * Connect to an audio source with input().
+ *
+ * @par Usage
+ * @code
+ * chain.add<Synth>("audio");
+ * chain.add<${name}>("analyzer").input("audio");
+ *
+ * // In update():
+ * float level = chain.get<${name}>("analyzer").rms();
+ * chain.get<Blur>("blur").radius = level * 20.0f;
+ * @endcode
+ */
+class ${name} : public AudioAnalyzer {
+public:
+    // Parameters
+    Param<float> smoothing{"smoothing", 0.9f, 0.0f, 0.99f};
+
+    ${name}() {
+        registerParam(smoothing);
+    }
+
+    /**
+     * @brief Get RMS (root mean square) level
+     * @return Value in range [0, 1]
+     */
+    float rms() const { return m_rms; }
+
+    /**
+     * @brief Get peak level
+     * @return Value in range [0, 1]
+     */
+    float peak() const { return m_peak; }
+
+    std::string name() const override { return "${name}"; }
+
+protected:
+    void initAnalyzer(Context& ctx) override {
+        m_rms = 0.0f;
+        m_peak = 0.0f;
+    }
+
+    void analyze(const float* input, uint32_t frames, uint32_t channels) override {
+        float sum = 0.0f;
+        float maxVal = 0.0f;
+        uint32_t totalSamples = frames * channels;
+
+        for (uint32_t i = 0; i < totalSamples; i++) {
+            float sample = std::abs(input[i]);
+            sum += sample * sample;
+            if (sample > maxVal) maxVal = sample;
+        }
+
+        float instantRms = std::sqrt(sum / totalSamples);
+        float s = static_cast<float>(smoothing);
+
+        // Exponential smoothing
+        m_rms = m_rms * s + instantRms * (1.0f - s);
+        m_peak = std::max(m_peak * s, maxVal);
+    }
+
+    void cleanupAnalyzer() override {}
+
+private:
+    float m_rms = 0.0f;
+    float m_peak = 0.0f;
+};
+`;
+    }
+
+    // Fallback (should not reach here)
+    return `// Unknown template type: ${templateType}`;
 }
 
 export function deactivate() {

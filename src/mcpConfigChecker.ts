@@ -44,22 +44,6 @@ export function mcpServerScriptExists(): boolean {
 }
 
 /**
- * Derive docs path from a custom runtime path
- * e.g., /Users/jeff/Developer/vivid/build/bin/vivid -> /Users/jeff/Developer/vivid/docs
- */
-function deriveDocsPath(runtimePath: string): string | undefined {
-    // Go up from build/bin/vivid to find docs/ directory
-    // Typical structure: <repo>/build/bin/vivid
-    const repoRoot = path.resolve(path.dirname(runtimePath), '..', '..');
-    const docsDir = path.join(repoRoot, 'docs');
-
-    if (fs.existsSync(docsDir)) {
-        return docsDir;
-    }
-    return undefined;
-}
-
-/**
  * Configure Claude Code to use the Vivid MCP server
  */
 export async function configureVividMcp(): Promise<boolean> {
@@ -76,9 +60,9 @@ export async function configureVividMcp(): Promise<boolean> {
             settings.mcpServers = {};
         }
 
-        // Check if custom runtime path is set
+        // Check for vivid source path
         const config = vscode.workspace.getConfiguration('vivid');
-        const runtimePath = config.get<string>('runtimePath');
+        const vividRoot = config.get<string>('vividRoot');
 
         // Build MCP server configuration
         const mcpConfig: { command: string; args: string[]; env?: Record<string, string> } = {
@@ -86,14 +70,13 @@ export async function configureVividMcp(): Promise<boolean> {
             args: [MCP_SERVER_SCRIPT]
         };
 
-        // If custom runtime path is set, derive docs path for local dev
-        if (runtimePath) {
-            const docsPath = deriveDocsPath(runtimePath);
-            if (docsPath) {
-                mcpConfig.env = {
-                    VIVID_DOCS_DIR: docsPath
-                };
-            }
+        // Configure environment if vividRoot is set
+        if (vividRoot && fs.existsSync(path.join(vividRoot, 'docs'))) {
+            mcpConfig.env = {
+                VIVID_DOCS_DIR: path.join(vividRoot, 'docs'),
+                VIVID_SOURCE_DIR: vividRoot,
+                VIVID_RUNTIME_PATH: path.join(vividRoot, 'build', 'bin', 'vivid')
+            };
         }
 
         // Add vivid MCP server configuration
@@ -170,6 +153,16 @@ export function getMcpDocsPath(): string {
     const defaultDocsPath = path.join(os.homedir(), '.vivid', 'docs');
 
     try {
+        // First check vividRoot setting (new workflow)
+        const config = vscode.workspace.getConfiguration('vivid');
+        const vividRoot = config.get<string>('vividRoot');
+        if (vividRoot) {
+            const sourceDocsPath = path.join(vividRoot, 'docs');
+            if (fs.existsSync(sourceDocsPath)) {
+                return sourceDocsPath;
+            }
+        }
+
         if (!fs.existsSync(CLAUDE_CONFIG_FILE)) {
             return defaultDocsPath;
         }
