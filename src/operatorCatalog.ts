@@ -46,24 +46,28 @@ export class OperatorCatalog {
     /**
      * Load operator catalog from vivid runtime
      * @param runtimePath Path to vivid executable
+     * @param env Optional environment variables for the process
      */
-    async loadFromRuntime(runtimePath: string): Promise<boolean> {
+    async loadFromRuntime(runtimePath: string, env?: NodeJS.ProcessEnv): Promise<boolean> {
         this.log(`[OperatorCatalog] Loading from runtime: ${runtimePath}`);
 
         return new Promise((resolve) => {
-            const process = spawn(runtimePath, ['operators', '--json']);
+            const spawnedProcess = spawn(runtimePath, ['operators', '--json'], {
+                env: env,
+                timeout: 30000  // 30 second timeout
+            });
             let stdout = '';
             let stderr = '';
 
-            process.stdout.on('data', (data) => {
+            spawnedProcess.stdout.on('data', (data) => {
                 stdout += data.toString();
             });
 
-            process.stderr.on('data', (data) => {
+            spawnedProcess.stderr.on('data', (data) => {
                 stderr += data.toString();
             });
 
-            process.on('close', (code) => {
+            spawnedProcess.on('close', (code) => {
                 if (code !== 0) {
                     this.log(`[OperatorCatalog] Error: vivid operators --json exited with code ${code}`);
                     if (stderr) {
@@ -86,7 +90,7 @@ export class OperatorCatalog {
                 }
             });
 
-            process.on('error', (err) => {
+            spawnedProcess.on('error', (err) => {
                 this.log(`[OperatorCatalog] Error spawning process: ${err.message}`);
                 resolve(false);
             });

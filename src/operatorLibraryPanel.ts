@@ -47,6 +47,11 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
 
         // Send initial data if catalog is loaded
         this._updateWebview();
+
+        // If catalog isn't loaded yet, trigger a refresh
+        if (!this._catalog || !this._catalog.isLoaded()) {
+            vscode.commands.executeCommand('vivid.refreshOperatorLibrary');
+        }
     }
 
     public setCatalog(catalog: OperatorCatalog) {

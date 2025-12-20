@@ -951,6 +951,9 @@ function connectToRuntime() {
     runtimeClient.onConnected(() => {
         outputChannel.appendLine('Connected to Vivid runtime');
         statusBar?.setConnected(true);
+
+        // Load operator catalog when runtime connects (for library panel)
+        refreshOperatorLibrary();
     });
 
     runtimeClient.onDisconnected(() => {
@@ -1638,9 +1641,12 @@ async function refreshOperatorLibrary() {
 
     operatorLibraryPanel.setLoading(true);
 
-    const loaded = await operatorCatalog.loadFromRuntime(runtimeManager.executablePath);
+    // Pass the environment to ensure dynamic libraries can be found
+    const env = runtimeManager.getEnvironment();
+    const loaded = await operatorCatalog.loadFromRuntime(runtimeManager.executablePath, env);
 
     if (loaded) {
+        operatorLibraryPanel.setLoading(false);
         operatorLibraryPanel.setCatalog(operatorCatalog);
     } else {
         operatorLibraryPanel.setLoadError('Failed to load operators from runtime');
@@ -1659,6 +1665,7 @@ async function addOperator() {
     }
 
     const runtimePath = runtimeManager.executablePath;
+    const runtimeEnv = runtimeManager.getEnvironment();
 
     // Load catalog if not already loaded
     if (!operatorCatalog.isLoaded()) {
@@ -1667,7 +1674,7 @@ async function addOperator() {
             title: 'Loading operator catalog...',
             cancellable: false
         }, async () => {
-            return await operatorCatalog!.loadFromRuntime(runtimePath!);
+            return await operatorCatalog!.loadFromRuntime(runtimePath!, runtimeEnv);
         });
 
         if (!loaded) {

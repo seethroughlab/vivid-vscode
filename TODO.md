@@ -6,4 +6,5 @@
 [x] If we need to, you can update the runtime github action to facilitate the extension fetching documents (~/Developer/vivid).
 [x] The extension should warn the user if claude isn't set up to use the MCP server, and then show them how.
 [x] it should fetch the documentation with the runtime (on-demand) so that the docs are in sync (version-wise) with the runtime.
-[ ] Claude code isn't finding the MCP server when I open a project: "I don't see a vivid documentation MCP server in my available tools, and there are no local docs in this project. Do you have a vivid MCP server configured that should be providing the documentation? If so, it may not be connected. Otherwise, could you share the relevant parts of the operator reference, or point me to local docs?"
+[x] Claude code isn't finding the MCP server when I open a project: "I don't see a vivid documentation MCP server in my available tools, and there are no local docs in this project. Do you have a vivid MCP server configured that should be providing the documentation? If so, it may not be connected. Otherwise, could you share the relevant parts of the operator reference, or point me to local docs?"
+[ ] There's no way to get out of fullscreen mode. 
