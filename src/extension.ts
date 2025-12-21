@@ -14,6 +14,8 @@ import { RuntimeManager } from './runtimeManager';
 import { ChildProcess, spawn } from 'child_process';
 import { checkAndPromptMcpConfiguration } from './mcpConfigChecker';
 import { OperatorCatalog } from './operatorCatalog';
+import { parseCode, findOperatorDeclarations, findInputCalls, isInitialized as isParserInitialized } from './cppParser';
+import { validateInputCalls } from './chainValidator';
 import { OperatorLibraryPanel } from './operatorLibraryPanel';
 import { OperatorDropProvider } from './operatorDropProvider';
 import { AddonManager, showAddonManager } from './addonManager';
@@ -330,6 +332,10 @@ export function activate(context: vscode.ExtensionContext) {
             if (editor && decorationManager) {
                 decorationManager.updateDecorations(editor);
             }
+            // Run semantic validation when switching to chain.cpp
+            if (editor && editor.document.fileName.endsWith('chain.cpp')) {
+                scheduleSemanticValidation(editor.document);
+            }
         })
     );
 
@@ -339,6 +345,8 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.workspace.onDidChangeTextDocument(event => {
             if (event.document.fileName.endsWith('chain.cpp')) {
                 chainCodeSync?.onDocumentChanged();
+                // Run semantic validation (debounced)
+                scheduleSemanticValidation(event.document);
             }
         })
     );
@@ -1150,6 +1158,65 @@ function showCompileErrors(message: string) {
             }
         }
     }
+}
+
+// Debounce timer for semantic validation
+let semanticValidationTimer: NodeJS.Timeout | undefined;
+
+/**
+ * Run semantic validation on chain.cpp
+ * Checks for undefined operator references and type mismatches
+ */
+function runSemanticValidation(document: vscode.TextDocument) {
+    if (!isParserInitialized()) {
+        return;
+    }
+
+    const code = document.getText();
+    const tree = parseCode(code);
+    if (!tree) {
+        return;
+    }
+
+    const operators = findOperatorDeclarations(tree);
+    const operatorVars = operators.map(op => op.variableName);
+    const inputCalls = findInputCalls(tree, operatorVars);
+
+    // Get current diagnostics for this file (preserve compile errors)
+    const existingDiagnostics = diagnosticCollection.get(document.uri) || [];
+    const compileDiagnostics = existingDiagnostics.filter(d => d.source === 'Vivid');
+
+    // Run validation (only if catalog is loaded)
+    if (!operatorCatalog) {
+        return;
+    }
+    const validationErrors = validateInputCalls(operators, inputCalls, operatorCatalog);
+
+    // Convert validation errors to VS Code diagnostics
+    const semanticDiagnostics: vscode.Diagnostic[] = validationErrors.map(err => {
+        const diagnostic = new vscode.Diagnostic(
+            new vscode.Range(err.line, err.startColumn, err.line, err.endColumn),
+            err.message,
+            err.severity
+        );
+        diagnostic.source = 'Vivid (semantic)';
+        return diagnostic;
+    });
+
+    // Combine compile errors with semantic errors
+    diagnosticCollection.set(document.uri, [...compileDiagnostics, ...semanticDiagnostics]);
+}
+
+/**
+ * Schedule semantic validation with debouncing
+ */
+function scheduleSemanticValidation(document: vscode.TextDocument) {
+    if (semanticValidationTimer) {
+        clearTimeout(semanticValidationTimer);
+    }
+    semanticValidationTimer = setTimeout(() => {
+        runSemanticValidation(document);
+    }, 500); // 500ms debounce
 }
 
 async function startRuntime(_context: vscode.ExtensionContext) {

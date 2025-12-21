@@ -22,6 +22,14 @@ export interface ParsedParam {
     isConstant: boolean;    // True if value is a literal (e.g., 4.0f), false if expression
 }
 
+export interface ParsedInputCall {
+    operatorVar: string;    // Variable calling .input() (e.g., "blur")
+    inputName: string;      // The string argument (e.g., "noise")
+    line: number;
+    startColumn: number;
+    endColumn: number;
+}
+
 let parser: Parser | null = null;
 let cppLanguage: Language | null = null;
 let initialized = false;
@@ -247,6 +255,50 @@ export function findMemberAssignments(tree: Tree, knownOperators: string[]): Par
 }
 
 /**
+ * Find all .input("operatorName") calls
+ * Used for validation that referenced operators exist
+ */
+export function findInputCalls(tree: Tree, knownOperators: string[]): ParsedInputCall[] {
+    if (!cppLanguage) return [];
+
+    const calls: ParsedInputCall[] = [];
+    const operatorSet = new Set(knownOperators);
+
+    walkTree(tree.rootNode, (node) => {
+        if (node.type === 'call_expression') {
+            const funcExpr = node.childForFieldName('function');
+            if (funcExpr && funcExpr.type === 'field_expression') {
+                const field = funcExpr.childForFieldName('field');
+                const object = findChildOfType(funcExpr, 'identifier');
+
+                // Check if this is a .input() call on a known operator variable
+                if (field && field.text === 'input' && object && operatorSet.has(object.text)) {
+                    const args = node.childForFieldName('arguments');
+                    if (args) {
+                        const stringLit = findChildOfType(args, 'string_literal');
+                        if (stringLit) {
+                            const stringContent = findChildOfType(stringLit, 'string_content');
+                            const inputName = stringContent ? stringContent.text : stringLit.text.replace(/^["']|["']$/g, '');
+
+                            calls.push({
+                                operatorVar: object.text,
+                                inputName: inputName,
+                                line: stringLit.startPosition.row,
+                                startColumn: stringLit.startPosition.column,
+                                endColumn: stringLit.endPosition.column
+                            });
+                            console.log(`[CppParser] Found input call: ${object.text}.input("${inputName}")`);
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    return calls;
+}
+
+/**
  * Find fluent-style parameter calls like: .scale(4.0f)
  * This handles the chained method call style if needed
  */
@@ -342,19 +394,20 @@ function findChildOfType(node: Node, type: string): Node | null {
 }
 
 /**
- * Parse a chain.cpp file and return all operators and their parameters
+ * Parse a chain.cpp file and return all operators, parameters, and input calls
  */
-export function parseChainFile(code: string): { operators: ParsedOperator[], params: ParsedParam[] } {
+export function parseChainFile(code: string): { operators: ParsedOperator[], params: ParsedParam[], inputCalls: ParsedInputCall[] } {
     const tree = parseCode(code);
     if (!tree) {
-        return { operators: [], params: [] };
+        return { operators: [], params: [], inputCalls: [] };
     }
 
     const operators = findOperatorDeclarations(tree);
     const operatorVars = operators.map(op => op.variableName);
     const params = findMemberAssignments(tree, operatorVars);
+    const inputCalls = findInputCalls(tree, operatorVars);
 
-    return { operators, params };
+    return { operators, params, inputCalls };
 }
 
 export function isInitialized(): boolean {
