@@ -1,8 +1,8 @@
 {
   "name": "vivid-vscode",
   "displayName": "Vivid Creative Coding",
-  "description": "VS Code support for Vivid creative coding framework",
-  "version": "0.1.0",
+  "description": "VS Code support for Vivid creative coding framework - WGSL syntax highlighting and runtime auto-download",
+  "version": "0.2.0",
   "publisher": "seethroughlab",
   "repository": {
     "type": "git",
@@ -13,97 +13,14 @@
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Visualization",
-    "Other"
+    "Programming Languages"
   ],
   "activationEvents": [
     "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "contributes": {
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "vivid",
-          "title": "Vivid",
-          "icon": "resources/vivid-icon.svg"
-        }
-      ]
-    },
-    "views": {
-      "vivid": [
-        {
-          "id": "vividOperatorLibrary",
-          "name": "Library",
-          "type": "webview",
-          "contextualTitle": "Operator Library"
-        },
-        {
-          "id": "vividOperators",
-          "name": "Chain",
-          "contextualTitle": "Vivid Operators"
-        },
-        {
-          "id": "vividInspector",
-          "name": "Inspector",
-          "type": "webview",
-          "contextualTitle": "Node Inspector"
-        },
-        {
-          "id": "vividPerformance",
-          "name": "Performance",
-          "type": "webview",
-          "contextualTitle": "Vivid Performance"
-        },
-        {
-          "id": "vividWindowControls",
-          "name": "Window",
-          "type": "webview",
-          "contextualTitle": "Window Controls"
-        }
-      ]
-    },
     "commands": [
-      {
-        "command": "vivid.startRuntime",
-        "title": "Vivid: Start Runtime"
-      },
-      {
-        "command": "vivid.stopRuntime",
-        "title": "Vivid: Stop Runtime"
-      },
-      {
-        "command": "vivid.reload",
-        "title": "Vivid: Force Reload"
-      },
-      {
-        "command": "vivid.toggleInlineDecorations",
-        "title": "Vivid: Toggle Inline Decorations"
-      },
-      {
-        "command": "vivid.goToOperator",
-        "title": "Vivid: Go to Operator"
-      },
-      {
-        "command": "vivid.refreshOperators",
-        "title": "Refresh",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "vivid.editParam",
-        "title": "Vivid: Edit Parameter",
-        "icon": "$(edit)"
-      },
-      {
-        "command": "vivid.soloOperator",
-        "title": "Vivid: Solo Operator",
-        "icon": "$(eye)"
-      },
-      {
-        "command": "vivid.exitSolo",
-        "title": "Vivid: Exit Solo Mode",
-        "icon": "$(eye-closed)"
-      },
       {
         "command": "vivid.checkForUpdates",
         "title": "Vivid: Check for Updates"
@@ -113,69 +30,14 @@
         "title": "Vivid: Reinstall Runtime"
       },
       {
-        "command": "vivid.createProject",
-        "title": "Vivid: Create New Project"
+        "command": "vivid.downloadRuntime",
+        "title": "Vivid: Download Runtime"
       },
       {
-        "command": "vivid.configureMcp",
-        "title": "Vivid: Configure MCP Server"
-      },
-      {
-        "command": "vivid.addOperator",
-        "title": "Vivid: Add Operator"
-      },
-      {
-        "command": "vivid.manageAddons",
-        "title": "Vivid: Manage Addons"
-      },
-      {
-        "command": "vivid.bundleProject",
-        "title": "Vivid: Bundle as App"
-      },
-      {
-        "command": "vivid.createOperatorTemplate",
-        "title": "Vivid: Create Operator Template"
+        "command": "vivid.showOutput",
+        "title": "Vivid: Show Output"
       }
     ],
-    "keybindings": [
-      {
-        "command": "vivid.addOperator",
-        "key": "ctrl+shift+a",
-        "mac": "cmd+shift+a",
-        "when": "resourceFilename == chain.cpp"
-      }
-    ],
-    "menus": {
-      "view/title": [
-        {
-          "command": "vivid.refreshOperators",
-          "when": "view == vividOperators",
-          "group": "navigation"
-        },
-        {
-          "command": "vivid.exitSolo",
-          "when": "view == vividOperators",
-          "group": "navigation"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "vivid.editParam",
-          "when": "view == vividOperators && viewItem == param",
-          "group": "inline"
-        },
-        {
-          "command": "vivid.soloOperator",
-          "when": "view == vividOperators && viewItem == operator",
-          "group": "1_solo"
-        },
-        {
-          "command": "vivid.exitSolo",
-          "when": "view == vividOperators && viewItem == operator-soloed",
-          "group": "1_solo"
-        }
-      ]
-    },
     "configuration": {
       "title": "Vivid",
       "properties": {
@@ -184,30 +46,10 @@
           "default": "",
           "description": "Path to vivid source root directory (for development builds). Leave empty to use auto-downloaded runtime."
         },
-        "vivid.websocketPort": {
-          "type": "number",
-          "default": 9876,
-          "description": "WebSocket port for runtime communication"
-        },
-        "vivid.showInlineDecorations": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show inline preview decorations in editor"
-        },
-        "vivid.previewSize": {
-          "type": "number",
-          "default": 48,
-          "description": "Size of inline preview thumbnails in pixels"
-        },
-        "vivid.autoConnect": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically connect to runtime when opening a Vivid project"
-        },
         "vivid.checkUpdatesOnStart": {
           "type": "boolean",
           "default": true,
-          "description": "Check for runtime updates when the extension starts"
+          "description": "Check for runtime updates when VS Code starts"
         }
       }
     },
@@ -222,32 +64,24 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run esbuild-base -- --minify && npm run bundle-mcp",
+    "vscode:prepublish": "npm run esbuild-base -- --minify",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
-    "esbuild-base": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --external:web-tree-sitter --format=cjs --platform=node",
+    "esbuild-base": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",
     "esbuild": "npm run esbuild-base -- --sourcemap",
     "esbuild-watch": "npm run esbuild-base -- --sourcemap --watch",
-    "bundle-mcp": "esbuild src/mcp/server.ts --bundle --platform=node --target=node18 --outfile=out/mcp-server.bundle.js",
     "package": "vsce package",
     "publish": "vsce publish"
   },
-  "dependencies": {
-    "web-tree-sitter": "^0.26.3"
-  },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
     "@types/node": "^20.10.0",
     "@types/vscode": "^1.85.0",
-    "@types/ws": "^8.5.10",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
-    "@vscode/tree-sitter-wasm": "^0.3.0",
     "@vscode/vsce": "^2.22.0",
     "esbuild": "^0.20.0",
     "eslint": "^8.50.0",
-    "typescript": "^5.3.0",
-    "ws": "^8.14.2"
+    "typescript": "^5.3.0"
   }
 }

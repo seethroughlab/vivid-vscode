@@ -1,9 +1,17 @@
+/**
+ * Runtime Manager
+ *
+ * Handles downloading and updating the Vivid runtime from GitHub releases.
+ * The extension no longer spawns or manages the runtime process - that's
+ * handled by Claude Code via the CLI.
+ */
+
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as https from 'https';
-import { execSync, spawn } from 'child_process';
+import { execSync } from 'child_process';
 
 // GitHub repository info for vivid runtime
 const GITHUB_OWNER = 'seethroughlab';
@@ -31,19 +39,11 @@ interface VersionInfo {
 export class RuntimeManager {
     private installDir: string;
     private outputChannel: vscode.OutputChannel;
-    private extensionPath: string = '';
     private vividRoot: string | undefined;
 
     constructor(outputChannel: vscode.OutputChannel) {
         this.outputChannel = outputChannel;
         this.installDir = path.join(os.homedir(), '.vivid');
-    }
-
-    /**
-     * Set the extension path (needed for copying MCP server)
-     */
-    setExtensionPath(extensionPath: string): void {
-        this.extensionPath = extensionPath;
     }
 
     /**
@@ -119,13 +119,6 @@ export class RuntimeManager {
     }
 
     /**
-     * Get the MCP server script path
-     */
-    get mcpServerPath(): string {
-        return path.join(this.installDir, 'mcp-server.js');
-    }
-
-    /**
      * Check if vivid is installed
      */
     isInstalled(): boolean {
@@ -160,37 +153,6 @@ export class RuntimeManager {
         };
         const versionFile = path.join(this.effectiveInstallDir, 'version.json');
         fs.writeFileSync(versionFile, JSON.stringify(info, null, 2));
-    }
-
-    /**
-     * Install the MCP server bundle from the extension to ~/.vivid/
-     */
-    installMcpServer(): boolean {
-        if (!this.extensionPath) {
-            this.outputChannel.appendLine('Cannot install MCP server: extension path not set');
-            return false;
-        }
-
-        const sourcePath = path.join(this.extensionPath, 'out', 'mcp-server.bundle.js');
-        if (!fs.existsSync(sourcePath)) {
-            this.outputChannel.appendLine(`MCP server bundle not found at: ${sourcePath}`);
-            return false;
-        }
-
-        try {
-            // Ensure install directory exists
-            if (!fs.existsSync(this.installDir)) {
-                fs.mkdirSync(this.installDir, { recursive: true });
-            }
-
-            // Copy the MCP server bundle
-            fs.copyFileSync(sourcePath, this.mcpServerPath);
-            this.outputChannel.appendLine(`MCP server installed to: ${this.mcpServerPath}`);
-            return true;
-        } catch (error) {
-            this.outputChannel.appendLine(`Failed to install MCP server: ${error}`);
-            return false;
-        }
     }
 
     /**
@@ -642,36 +604,4 @@ export class RuntimeManager {
         }
     }
 
-    /**
-     * Get environment variables for running vivid
-     */
-    getEnvironment(): NodeJS.ProcessEnv {
-        const env = { ...process.env };
-
-        // Add lib path for dynamic libraries
-        if (process.platform === 'darwin') {
-            env['DYLD_LIBRARY_PATH'] = this.libPath + (env['DYLD_LIBRARY_PATH'] ? ':' + env['DYLD_LIBRARY_PATH'] : '');
-        } else if (process.platform === 'linux') {
-            env['LD_LIBRARY_PATH'] = this.libPath + (env['LD_LIBRARY_PATH'] ? ':' + env['LD_LIBRARY_PATH'] : '');
-        } else if (process.platform === 'win32') {
-            env['PATH'] = this.libPath + ';' + (env['PATH'] || '');
-        }
-
-        return env;
-    }
-
-    /**
-     * Spawn vivid process
-     */
-    spawnVivid(projectPath: string): ReturnType<typeof spawn> {
-        const execPath = this.executablePath;
-        const env = this.getEnvironment();
-
-        this.outputChannel.appendLine(`Starting vivid: ${execPath} "${projectPath}"`);
-
-        return spawn(execPath, [projectPath], {
-            env,
-            cwd: path.dirname(execPath)
-        });
-    }
 }
