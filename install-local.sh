@@ -14,7 +14,6 @@ rm -rf out/*.js out/*.js.map out/mcp
 
 echo "Building extension..."
 npm run esbuild
-npm run bundle-mcp
 
 echo "Packaging extension..."
 npm run package
