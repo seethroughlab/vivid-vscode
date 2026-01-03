@@ -37,7 +37,14 @@ jobs:
 
       - name: Get version from package.json
         id: version
-        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
@@ -47,7 +54,12 @@ jobs:
 
       - name: Publish to VS Code Marketplace
         if: github.event_name == 'push' || github.event.inputs.publish_marketplace == 'true'
-        run: npx vsce publish -p ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ "${{ steps.version.outputs.prerelease }}" == "true" ]; then
+            npx vsce publish --pre-release -p ${{ secrets.VSCE_PAT }}
+          else
+            npx vsce publish -p ${{ secrets.VSCE_PAT }}
+          fi
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
