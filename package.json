@@ -2,7 +2,7 @@
   "name": "vivid-vscode",
   "displayName": "Vivid Creative Coding",
   "description": "VS Code support for Vivid creative coding framework - WGSL syntax highlighting and runtime auto-download",
-  "version": "0.2.0",
+  "version": "0.1.0-alpha.1",
   "publisher": "seethroughlab",
   "repository": {
     "type": "git",
@@ -36,6 +36,14 @@
       {
         "command": "vivid.showOutput",
         "title": "Vivid: Show Output"
+      },
+      {
+        "command": "vivid.refreshOperatorLibrary",
+        "title": "Vivid: Refresh Operator Library"
+      },
+      {
+        "command": "vivid.configureClaudeCode",
+        "title": "Vivid: Configure Claude Code Integration"
       }
     ],
     "configuration": {
@@ -61,7 +69,25 @@
         ],
         "configuration": "./language-configuration.json"
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vivid",
+          "title": "Vivid",
+          "icon": "resources/vivid-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "vivid": [
+        {
+          "type": "webview",
+          "id": "vividOperatorLibrary",
+          "name": "Operators"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run esbuild-base -- --minify",
