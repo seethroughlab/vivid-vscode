@@ -113,7 +113,7 @@ export class RuntimeManager {
      */
     get includePath(): string | undefined {
         if (this.vividRoot) {
-            return path.join(this.vividRoot, 'core', 'include');
+            return path.join(this.vividRoot, 'src', 'core', 'include');
         }
         return path.join(this.installDir, 'include');
     }
@@ -510,12 +510,12 @@ export class RuntimeManager {
             if (result && result.length > 0) {
                 const selectedPath = result[0].fsPath;
                 // Verify this looks like a vivid source directory
-                const hasCore = fs.existsSync(path.join(selectedPath, 'core'));
+                const hasCore = fs.existsSync(path.join(selectedPath, 'src', 'core'));
                 const hasBuild = fs.existsSync(path.join(selectedPath, 'build', 'bin', 'vivid')) ||
                                  fs.existsSync(path.join(selectedPath, 'build', 'bin', 'vivid.exe'));
 
                 if (!hasCore) {
-                    vscode.window.showErrorMessage('Selected directory does not appear to be a vivid source directory (missing core/)');
+                    vscode.window.showErrorMessage('Selected directory does not appear to be a vivid source directory (missing src/core/)');
                     return false;
                 }
 
