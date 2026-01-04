@@ -20,23 +20,17 @@ When releasing a new extension version, update this matrix to document supported
 
 ## Version Format
 
-**Git tags** use full semver with pre-release suffix:
+**Git tags** are the single source of truth for versioning:
 ```
 v0.1.0           Stable release
-v0.1.1-alpha.1   Alpha pre-release
-v0.1.1-beta.1    Beta pre-release
-v0.1.1-rc.1      Release candidate
+v0.1.0-alpha.2   Alpha pre-release
+v0.1.0-beta.1    Beta pre-release
+v0.1.0-rc.1      Release candidate
 ```
 
-**package.json** uses base version only (Marketplace requirement):
-```
-0.1.0            Used for both stable and pre-release
-```
+**package.json** contains a placeholder (`0.0.0-dev`) that is overwritten during CI from the git tag.
 
-The VS Code Marketplace doesn't support semver pre-release versions. Instead, we use:
-- Git tag suffix (e.g., `-alpha.1`) to indicate pre-release
-- `--pre-release` flag when publishing to Marketplace
-- package.json contains the base version without suffix
+Pre-releases are published to the Marketplace with the `--pre-release` flag.
 
 ## Release Types
 
@@ -90,34 +84,31 @@ Final testing before stable release. Should be production-ready.
 ## Creating a Release
 
 1. Ensure CI passes on `main`
-2. Update version in `package.json`
-3. Update the Compatibility Matrix above if Vivid support changed
-4. Commit changes
-5. Create and push the tag:
+2. Update the Compatibility Matrix above if Vivid support changed
+3. Create and push the tag:
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v0.1.0-alpha.2
+   git push origin v0.1.0-alpha.2
    ```
 
 The release workflow will:
+- Extract version from the git tag
 - Build and package the extension
-- Publish to VS Code Marketplace (stable releases only)
+- Publish to VS Code Marketplace (with `--pre-release` flag for pre-release tags)
 - Create GitHub Release with VSIX artifact
 
 ## Release Targets
 
 | Tag Format | VS Code Marketplace | GitHub Release |
 |------------|---------------------|----------------|
-| `v1.2.3` | Published | Created with VSIX |
-| `v1.2.3-alpha.1` | Not published | Created with VSIX |
-| `v1.2.3-beta.1` | Not published | Created with VSIX |
-| `v1.2.3-rc.1` | Not published | Created with VSIX |
-
-Pre-releases can be manually installed via the VSIX file from GitHub Releases.
+| `v0.1.0` | Published (stable) | Created with VSIX |
+| `v0.1.0-alpha.2` | Published (pre-release) | Created with VSIX |
+| `v0.1.0-beta.1` | Published (pre-release) | Created with VSIX |
+| `v0.1.0-rc.1` | Published (pre-release) | Created with VSIX |
 
 ## Version in Code
 
-The version is defined in `package.json`. Access in TypeScript:
+At runtime, the version is available via the extension API (injected from git tag during CI):
 
 ```typescript
 import * as vscode from 'vscode';
