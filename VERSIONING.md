@@ -20,16 +20,23 @@ When releasing a new extension version, update this matrix to document supported
 
 ## Version Format
 
+**Git tags** use full semver with pre-release suffix:
 ```
-MAJOR.MINOR.PATCH[-PRERELEASE]
+v0.1.0           Stable release
+v0.1.1-alpha.1   Alpha pre-release
+v0.1.1-beta.1    Beta pre-release
+v0.1.1-rc.1      Release candidate
+```
 
-Examples:
-  0.1.0          Stable release
-  0.1.1-alpha.1  Alpha pre-release
-  0.1.1-beta.1   Beta pre-release
-  0.1.1-rc.1     Release candidate
-  1.0.0          First stable major release
+**package.json** uses base version only (Marketplace requirement):
 ```
+0.1.0            Used for both stable and pre-release
+```
+
+The VS Code Marketplace doesn't support semver pre-release versions. Instead, we use:
+- Git tag suffix (e.g., `-alpha.1`) to indicate pre-release
+- `--pre-release` flag when publishing to Marketplace
+- package.json contains the base version without suffix
 
 ## Release Types
 

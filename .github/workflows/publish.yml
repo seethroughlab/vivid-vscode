@@ -35,12 +35,14 @@ jobs:
       - name: Package extension
         run: npm run package
 
-      - name: Get version from package.json
+      - name: Get version and check if pre-release
         id: version
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          if [[ "$VERSION" == *-* ]]; then
+          # Check git tag for pre-release indicator (e.g., v0.1.0-alpha.1)
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ "$TAG" == *-* ]]; then
             echo "prerelease=true" >> $GITHUB_OUTPUT
           else
             echo "prerelease=false" >> $GITHUB_OUTPUT
