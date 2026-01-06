@@ -196,12 +196,22 @@ export class RuntimeManager {
 
     /**
      * Fetch latest release info from GitHub
+     * If includePreReleases setting is enabled, includes alpha/beta releases
      */
     async getLatestRelease(): Promise<GitHubRelease> {
+        const config = vscode.workspace.getConfiguration('vivid');
+        const includePreReleases = config.get<boolean>('includePreReleases', false);
+
         return new Promise((resolve, reject) => {
+            // Use /releases endpoint with per_page=1 to include pre-releases,
+            // or /releases/latest for stable only
+            const apiPath = includePreReleases
+                ? `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=1`
+                : `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
+
             const options = {
                 hostname: 'api.github.com',
-                path: `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`,
+                path: apiPath,
                 headers: {
                     'User-Agent': 'vivid-vscode-extension',
                     'Accept': 'application/vnd.github.v3+json'
@@ -222,7 +232,17 @@ export class RuntimeManager {
                 res.on('data', chunk => data += chunk);
                 res.on('end', () => {
                     try {
-                        resolve(JSON.parse(data));
+                        const parsed = JSON.parse(data);
+                        // Handle array response (pre-releases) vs object (latest stable)
+                        if (Array.isArray(parsed)) {
+                            if (parsed.length === 0) {
+                                reject(new Error('No releases found. Please build vivid manually.'));
+                                return;
+                            }
+                            resolve(parsed[0]);
+                        } else {
+                            resolve(parsed);
+                        }
                     } catch (e) {
                         reject(new Error('Failed to parse GitHub response'));
                     }
