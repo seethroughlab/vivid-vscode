@@ -285,6 +285,65 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
             opacity: 0.6;
             font-size: 12px;
         }
+        .operator-card.selected {
+            background: var(--vscode-list-activeSelectionBackground);
+            border-left-color: var(--vscode-focusBorder);
+        }
+        .operator-details {
+            background: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 4px;
+            margin: 4px 12px 8px 24px;
+            padding: 10px;
+            font-size: 11px;
+        }
+        .operator-details-row {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 8px;
+            opacity: 0.85;
+        }
+        .operator-details-label {
+            font-weight: 500;
+            min-width: 80px;
+        }
+        .operator-details h4 {
+            margin: 10px 0 6px 0;
+            font-size: 11px;
+            font-weight: 600;
+            opacity: 0.9;
+        }
+        .param-item {
+            margin: 4px 0;
+            padding: 4px 8px;
+            background: var(--vscode-sideBar-background);
+            border-radius: 3px;
+        }
+        .param-name {
+            font-weight: 500;
+        }
+        .param-type {
+            opacity: 0.7;
+            margin-left: 4px;
+        }
+        .param-default {
+            float: right;
+            opacity: 0.7;
+        }
+        .param-range {
+            font-size: 10px;
+            opacity: 0.6;
+            margin-top: 2px;
+        }
+        .usage-code {
+            font-family: var(--vscode-editor-font-family, monospace);
+            background: var(--vscode-textCodeBlock-background);
+            padding: 8px;
+            border-radius: 3px;
+            margin-top: 4px;
+            font-size: 11px;
+            overflow-x: auto;
+        }
     </style>
 </head>
 <body>
@@ -303,11 +362,15 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
         let categories = [];
         let searchQuery = '';
         let collapsedCategories = new Set();
+        let selectedOperator = null;
 
         // Restore state
         const state = vscode.getState() || {};
         if (state.collapsedCategories) {
             collapsedCategories = new Set(state.collapsedCategories);
+        }
+        if (state.selectedOperator) {
+            selectedOperator = state.selectedOperator;
         }
 
         window.addEventListener('message', event => {
@@ -376,8 +439,9 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
                         badges.push(\`<span class="operator-badge addon">\${escapeHtml(op.addon)}</span>\`);
                     }
 
+                    const isSelected = selectedOperator === op.name;
                     html += \`
-                        <div class="operator-card"
+                        <div class="operator-card \${isSelected ? 'selected' : ''}"
                              onclick="selectOperator('\${escapeHtml(op.name)}')"
                              draggable="true"
                              ondragstart="onDragStart(event, '\${escapeHtml(op.name)}')"
@@ -389,6 +453,11 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
                             <div class="operator-desc">\${escapeHtml(op.description)}</div>
                         </div>
                     \`;
+
+                    // Show details panel if selected
+                    if (isSelected) {
+                        html += renderOperatorDetails(op);
+                    }
                 }
 
                 html += '</div></div>';
@@ -435,16 +504,71 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
             } else {
                 collapsedCategories.add(name);
             }
-            // Save state
-            vscode.setState({ collapsedCategories: Array.from(collapsedCategories) });
+            saveState();
             render();
         }
 
         function selectOperator(name) {
-            vscode.postMessage({
-                type: 'selectOperator',
-                name: name
+            // Toggle selection
+            if (selectedOperator === name) {
+                selectedOperator = null;
+            } else {
+                selectedOperator = name;
+            }
+            // Save state and re-render
+            saveState();
+            render();
+        }
+
+        function saveState() {
+            vscode.setState({
+                collapsedCategories: Array.from(collapsedCategories),
+                selectedOperator: selectedOperator
             });
+        }
+
+        function renderOperatorDetails(op) {
+            let html = '<div class="operator-details">';
+
+            // Output type and requires input
+            html += '<div class="operator-details-row">';
+            html += \`<span class="operator-details-label">Output:</span><span>\${escapeHtml(op.outputType)}</span>\`;
+            html += '</div>';
+            html += '<div class="operator-details-row">';
+            html += \`<span class="operator-details-label">Requires input:</span><span>\${op.requiresInput ? 'Yes' : 'No'}</span>\`;
+            html += '</div>';
+
+            // Parameters
+            if (op.params && op.params.length > 0) {
+                html += '<h4>Parameters</h4>';
+                for (const p of op.params) {
+                    html += '<div class="param-item">';
+                    html += \`<span class="param-name">\${escapeHtml(p.name)}</span>\`;
+                    html += \`<span class="param-type">(\${escapeHtml(p.type)})</span>\`;
+                    if (p.default !== undefined) {
+                        const defaultVal = Array.isArray(p.default) ? p.default.join(', ') : p.default;
+                        html += \`<span class="param-default">\${escapeHtml(String(defaultVal))}</span>\`;
+                    }
+                    if (p.min !== undefined && p.max !== undefined) {
+                        html += \`<div class="param-range">range: \${p.min} - \${p.max}</div>\`;
+                    }
+                    html += '</div>';
+                }
+            } else {
+                html += '<div style="opacity: 0.6; margin-top: 8px;">No parameters</div>';
+            }
+
+            // Usage example
+            html += '<h4>Usage</h4>';
+            const varName = op.name.toLowerCase().charAt(0);
+            html += \`<div class="usage-code">auto& \${varName} = chain.add&lt;\${escapeHtml(op.name)}&gt;("\${varName}1");\`;
+            if (op.requiresInput) {
+                html += \`\\n\${varName}.input(&other);\`;
+            }
+            html += '</div>';
+
+            html += '</div>';
+            return html;
         }
 
         function refresh() {
