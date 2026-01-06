@@ -27,11 +27,14 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           if [[ "$VERSION" == *-* ]]; then
             echo "prerelease=true" >> $GITHUB_OUTPUT
+            # Strip prerelease suffix for package.json (Marketplace requirement)
+            BASE_VERSION="${VERSION%%-*}"
           else
             echo "prerelease=false" >> $GITHUB_OUTPUT
+            BASE_VERSION="$VERSION"
           fi
-          # Inject version into package.json
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          # Inject base version into package.json (without prerelease suffix)
+          npm version "$BASE_VERSION" --no-git-tag-version --allow-same-version
 
       - name: Install dependencies
         run: npm ci
