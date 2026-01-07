@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.6] - 2026-01-06
+
+### Added
+- **Create New Project command**: Create Vivid projects from VS Code with template and addon selection
+- **Run Project command**: Run projects in terminal with options for fullscreen, UI overlay, and custom window size
+- **Bundle Project command**: Bundle projects as standalone apps with progress notification
+
 ## [0.1.0-alpha.5] - 2025-01-06
 
 ### Added

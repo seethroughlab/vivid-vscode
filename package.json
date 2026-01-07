@@ -44,6 +44,18 @@
       {
         "command": "vivid.configureClaudeCode",
         "title": "Vivid: Configure Claude Code Integration"
+      },
+      {
+        "command": "vivid.createProject",
+        "title": "Vivid: Create New Project"
+      },
+      {
+        "command": "vivid.runProject",
+        "title": "Vivid: Run Project"
+      },
+      {
+        "command": "vivid.bundleProject",
+        "title": "Vivid: Bundle Project"
       }
     ],
     "configuration": {
