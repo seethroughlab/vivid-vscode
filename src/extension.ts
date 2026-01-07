@@ -91,12 +91,10 @@ export function activate(context: vscode.ExtensionContext) {
     outputChannel = vscode.window.createOutputChannel('Vivid');
     runtimeManager = new RuntimeManager(outputChannel);
 
-    // Check vividRoot setting for development builds
+    // Check vividPath setting
     const config = vscode.workspace.getConfiguration('vivid');
-    const vividRoot = config.get<string>('vividRoot');
-    if (vividRoot) {
-        runtimeManager.setVividRoot(vividRoot);
-    }
+    const vividPath = config.get<string>('vividPath', '~/.vivid');
+    runtimeManager.setInstallDir(vividPath);
 
     // Set up operator catalog and library panel
     operatorCatalog = new OperatorCatalog();
@@ -537,6 +535,27 @@ export function activate(context: vscode.ExtensionContext) {
             operatorLibraryPanel.setLoadError('Failed to load operators from runtime');
         }
     }
+
+    // Listen for configuration changes
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration(async (e) => {
+            if (e.affectsConfiguration('vivid.vividPath')) {
+                const newConfig = vscode.workspace.getConfiguration('vivid');
+                const newVividPath = newConfig.get<string>('vividPath', '~/.vivid');
+
+                runtimeManager.setInstallDir(newVividPath);
+                outputChannel.appendLine(`Vivid path changed to: ${newVividPath}`);
+
+                // Refresh operator catalog with new path
+                await refreshOperatorCatalog();
+
+                // Check if MCP config needs updating
+                if (runtimeManager.isInstalled()) {
+                    handleClaudeCodeSetup(runtimeManager.executablePath, outputChannel);
+                }
+            }
+        })
+    );
 
     // Check if runtime is installed, offer to download if not
     if (!runtimeManager.isInstalled()) {

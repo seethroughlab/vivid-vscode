@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.7] - 2026-01-07
+
+### Changed
+- Replaced `vividRoot` setting with `vividPath` for specifying custom install locations
+- Extension now responds to `vividPath` configuration changes without restart
+- Simplified dev build support: point directly to `build/` directory containing `bin/vivid`
+
 ## [0.1.0-alpha.6] - 2026-01-06
 
 ### Added

@@ -39,7 +39,6 @@ interface VersionInfo {
 export class RuntimeManager {
     private installDir: string;
     private outputChannel: vscode.OutputChannel;
-    private vividRoot: string | undefined;
 
     constructor(outputChannel: vscode.OutputChannel) {
         this.outputChannel = outputChannel;
@@ -47,28 +46,22 @@ export class RuntimeManager {
     }
 
     /**
-     * Set the vivid source root path (for development builds)
-     * When set, binaries are expected in {vividRoot}/build/
+     * Set the vivid installation directory
+     * The binary is expected at {installDir}/bin/vivid
      */
-    setVividRoot(vividRoot: string): void {
-        this.vividRoot = vividRoot;
-        this.outputChannel.appendLine(`RuntimeManager: vivid root set to ${vividRoot}`);
-    }
-
-    /**
-     * Get the vivid source root path
-     */
-    getVividRoot(): string | undefined {
-        return this.vividRoot;
-    }
-
-    /**
-     * Get the effective install directory (vividRoot/build or ~/.vivid)
-     */
-    private get effectiveInstallDir(): string {
-        if (this.vividRoot) {
-            return path.join(this.vividRoot, 'build');
+    setInstallDir(installDir: string): void {
+        // Expand ~ to home directory
+        if (installDir.startsWith('~')) {
+            installDir = path.join(os.homedir(), installDir.slice(1));
         }
+        this.installDir = installDir;
+        this.outputChannel.appendLine(`RuntimeManager: install dir set to ${installDir}`);
+    }
+
+    /**
+     * Get the current install directory
+     */
+    getInstallDir(): string {
         return this.installDir;
     }
 
@@ -87,34 +80,27 @@ export class RuntimeManager {
      */
     get executablePath(): string {
         const ext = process.platform === 'win32' ? '.exe' : '';
-        return path.join(this.effectiveInstallDir, 'bin', `vivid${ext}`);
+        return path.join(this.installDir, 'bin', `vivid${ext}`);
     }
 
     /**
      * Get the lib directory path
      */
     get libPath(): string {
-        return path.join(this.effectiveInstallDir, 'lib');
+        return path.join(this.installDir, 'lib');
     }
 
     /**
      * Get the docs directory path
-     * When vividRoot is set, use source docs; otherwise use installed docs
      */
     get docsPath(): string {
-        if (this.vividRoot) {
-            return path.join(this.vividRoot, 'docs');
-        }
         return path.join(this.installDir, 'docs');
     }
 
     /**
-     * Get the include directory path (only available with vividRoot)
+     * Get the include directory path
      */
-    get includePath(): string | undefined {
-        if (this.vividRoot) {
-            return path.join(this.vividRoot, 'src', 'core', 'include');
-        }
+    get includePath(): string {
         return path.join(this.installDir, 'include');
     }
 
@@ -129,7 +115,7 @@ export class RuntimeManager {
      * Get installed version info
      */
     getInstalledVersion(): VersionInfo | null {
-        const versionFile = path.join(this.effectiveInstallDir, 'version.json');
+        const versionFile = path.join(this.installDir, 'version.json');
         if (!fs.existsSync(versionFile)) {
             return null;
         }
@@ -151,7 +137,7 @@ export class RuntimeManager {
             platform: process.platform,
             arch: process.arch
         };
-        const versionFile = path.join(this.effectiveInstallDir, 'version.json');
+        const versionFile = path.join(this.installDir, 'version.json');
         fs.writeFileSync(versionFile, JSON.stringify(info, null, 2));
     }
 
@@ -325,7 +311,7 @@ export class RuntimeManager {
         fs.mkdirSync(tempExtractDir, { recursive: true });
 
         // Ensure install directory exists
-        const targetDir = this.effectiveInstallDir;
+        const targetDir = this.installDir;
         if (!fs.existsSync(targetDir)) {
             fs.mkdirSync(targetDir, { recursive: true });
         }
@@ -518,35 +504,29 @@ export class RuntimeManager {
         if (choice === 'Download') {
             return this.installOrUpdate();
         } else if (choice === 'Browse...') {
-            // Let user select vivid source directory
+            // Let user select vivid install directory (containing bin/vivid)
             const result = await vscode.window.showOpenDialog({
                 canSelectFiles: false,
                 canSelectFolders: true,
                 canSelectMany: false,
-                title: 'Select vivid source directory',
-                openLabel: 'Select Vivid Directory'
+                title: 'Select vivid install directory (containing bin/vivid)',
+                openLabel: 'Select Directory'
             });
 
             if (result && result.length > 0) {
                 const selectedPath = result[0].fsPath;
-                // Verify this looks like a vivid source directory
-                const hasCore = fs.existsSync(path.join(selectedPath, 'src', 'core'));
-                const hasBuild = fs.existsSync(path.join(selectedPath, 'build', 'bin', 'vivid')) ||
-                                 fs.existsSync(path.join(selectedPath, 'build', 'bin', 'vivid.exe'));
+                // Verify this directory contains bin/vivid
+                const ext = process.platform === 'win32' ? '.exe' : '';
+                const hasBinary = fs.existsSync(path.join(selectedPath, 'bin', `vivid${ext}`));
 
-                if (!hasCore) {
-                    vscode.window.showErrorMessage('Selected directory does not appear to be a vivid source directory (missing src/core/)');
-                    return false;
-                }
-
-                if (!hasBuild) {
-                    vscode.window.showWarningMessage('Vivid build not found. Please build the project first (cmake --build build)');
+                if (!hasBinary) {
+                    vscode.window.showErrorMessage('Selected directory does not contain bin/vivid. For dev builds, select the build/ directory.');
                     return false;
                 }
 
                 const config = vscode.workspace.getConfiguration('vivid');
-                await config.update('vividRoot', selectedPath, vscode.ConfigurationTarget.Global);
-                this.setVividRoot(selectedPath);
+                await config.update('vividPath', selectedPath, vscode.ConfigurationTarget.Global);
+                this.setInstallDir(selectedPath);
                 return true;
             }
         }

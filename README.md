@@ -5,31 +5,55 @@ VS Code support for the [Vivid](https://github.com/seethroughlab/vivid) creative
 ## Features
 
 - **Auto-Download Runtime**: Automatically downloads the Vivid runtime on first use
-- **Compile Error Diagnostics**: GCC/Clang errors shown in Problems panel with jump-to-location
-- **Operator Tree View**: Browse chain operators in the sidebar
-- **Node Inspector**: Edit parameters with live preview
-- **Performance Panel**: FPS, frame time, and per-operator timing
-- **Inline Decorations**: Live values shown next to code
+- **Operator Library**: Browse available operators in the sidebar with inline documentation
 - **WGSL Language Support**: Syntax highlighting for shader files
+- **Claude Code Integration**: MCP server for AI-assisted creative coding
 
 ## Installation
 
-### For Users
+### From VS Code Marketplace (Recommended)
 
-**From VS Code Marketplace** (Recommended):
 1. Open VS Code
 2. Go to Extensions (Ctrl+Shift+X / Cmd+Shift+X)
 3. Search for "Vivid"
 4. Click Install
 
-**From VSIX file**:
+### From VSIX file
+
 1. Download the `.vsix` file from [Releases](https://github.com/seethroughlab/vivid-vscode/releases)
 2. In VS Code: Extensions → ⋯ → Install from VSIX...
 3. Select the downloaded file
 
-The extension will automatically download the Vivid runtime when you first run it.
+The extension will automatically download the Vivid runtime when you first use it.
 
-### For Developers
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `Vivid: Create New Project` | Create a new Vivid project with templates |
+| `Vivid: Run Project` | Run the current Vivid project |
+| `Vivid: Bundle Project` | Package project as standalone app |
+| `Vivid: Check for Updates` | Check for new Vivid releases |
+| `Vivid: Download Runtime` | Download the Vivid runtime |
+| `Vivid: Reinstall Runtime` | Force re-download of runtime |
+| `Vivid: Configure Claude Code Integration` | Set up MCP server for Claude Code |
+| `Vivid: Refresh Operator Library` | Refresh the operator library view |
+| `Vivid: Show Output` | Show the Vivid output channel |
+
+## Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `vivid.vividRoot` | `""` | Path to vivid source root (for development builds). Leave empty to use auto-downloaded runtime. |
+| `vivid.checkUpdatesOnStart` | `true` | Check for runtime updates on activation |
+
+## Views
+
+The extension adds a **Vivid** panel to the Activity Bar with:
+
+- **Operators**: Browse available operators with documentation
+
+## Development
 
 ```bash
 # Clone the repository
@@ -43,154 +67,7 @@ npm install
 npm run compile
 
 # Launch in development mode
-# Press F5 in VS Code, or:
-code --extensionDevelopmentPath=$(pwd)
-```
-
-**Using a local Vivid build**:
-
-If you're developing Vivid itself, set the runtime path in settings:
-```json
-{
-  "vivid.runtimePath": "/path/to/vivid/build/bin/vivid"
-}
-```
-
-This bypasses the auto-download and uses your local build.
-
-## How It Works
-
-### Runtime Auto-Download
-
-When you run "Vivid: Start Runtime" without a custom `runtimePath`:
-
-1. Extension checks `~/.vivid/bin/vivid`
-2. If missing, prompts to download from [GitHub Releases](https://github.com/seethroughlab/vivid/releases)
-3. Downloads the correct archive for your platform:
-   - `vivid-darwin-arm64.tar.gz` (macOS Apple Silicon)
-   - `vivid-darwin-x64.tar.gz` (macOS Intel)
-   - `vivid-win32-x64.zip` (Windows)
-   - `vivid-linux-x64.tar.gz` (Linux)
-4. Extracts to `~/.vivid/`
-5. Tracks version in `~/.vivid/version.json`
-
-### Update Checking
-
-- On startup (if `vivid.checkUpdatesOnStart` is enabled)
-- Manually via "Vivid: Check for Updates" command
-- Compares installed version against latest GitHub release
-
-## Commands
-
-### Runtime
-| Command | Description |
-|---------|-------------|
-| `Vivid: Start Runtime` | Launch Vivid (downloads if needed) |
-| `Vivid: Stop Runtime` | Stop runtime and disconnect |
-| `Vivid: Force Reload` | Trigger hot-reload |
-| `Vivid: Check for Updates` | Check for new Vivid releases |
-| `Vivid: Reinstall Runtime` | Force re-download of runtime |
-
-### Project
-| Command | Description |
-|---------|-------------|
-| `Vivid: Create New Project` | Create a new Vivid project with templates and addon selection |
-| `Vivid: Bundle as App` | Package project as standalone macOS app |
-| `Vivid: Create Operator Template` | Generate a custom operator template file |
-
-### Operators
-| Command | Shortcut | Description |
-|---------|----------|-------------|
-| `Vivid: Add Operator` | `Cmd+Shift+A` | Insert operator from catalog at cursor |
-| `Vivid: Solo Operator` | | Preview single operator output |
-| `Vivid: Exit Solo Mode` | | Return to normal view |
-
-### Editor
-| Command | Description |
-|---------|-------------|
-| `Vivid: Toggle Inline Decorations` | Show/hide inline value previews |
-| `Vivid: Go to Operator` | Jump to operator definition in chain.cpp |
-
-### Integration
-| Command | Description |
-|---------|-------------|
-| `Vivid: Configure MCP Server` | Set up Claude Code MCP integration |
-| `Vivid: Manage Addons` | Install/remove Vivid addons |
-
-## Configuration
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `vivid.runtimePath` | `""` | Custom path to vivid executable (empty = use auto-downloaded) |
-| `vivid.websocketPort` | `9876` | WebSocket port for runtime communication |
-| `vivid.showInlineDecorations` | `true` | Show inline value previews in editor |
-| `vivid.previewSize` | `48` | Thumbnail size in pixels |
-| `vivid.autoConnect` | `true` | Auto-connect when opening a Vivid project |
-| `vivid.checkUpdatesOnStart` | `true` | Check for runtime updates on activation |
-
-## Views
-
-The extension adds a **Vivid** panel to the Activity Bar with:
-
-- **Operators**: Tree view of all operators in your chain
-- **Inspector**: Parameter editor for selected operator
-- **Performance**: Real-time FPS and timing metrics
-
-## Creating Custom Operators
-
-Use `Vivid: Create Operator Template` to generate a starting point for your own operators:
-
-1. Run the command from the Command Palette (`Cmd+Shift+P`)
-2. Enter a name (e.g., `ColorShift`, `WaveDistort`)
-3. Select the operator type:
-
-| Type | Use Case |
-|------|----------|
-| **Shader Effect** | Process input textures with WGSL shaders (most common) |
-| **Shader Generator** | Generate textures from scratch (noise, gradients, shapes) |
-| **Value/Modulator** | Output scalar values for animation/modulation |
-| **Audio Synth** | Generate or process audio (requires vivid-audio) |
-| **Audio Analyzer** | Extract values from audio (RMS, spectrum, beats) |
-
-The template is created in `operators/yourOperator.h`. To use it:
-
-```cpp
-// In chain.cpp
-#include "operators/colorShift.h"
-
-void setup(Context& ctx) {
-    auto& chain = ctx.chain();
-    chain.add<ColorShift>("shift");
-}
-```
-
-## Troubleshooting
-
-**"Cannot connect to runtime"**
-- Ensure the runtime is started (Vivid: Start Runtime)
-- Check that port 9876 is not in use
-- Look for errors in Output → Vivid
-
-**"No releases found"**
-- The Vivid runtime may not have releases yet
-- Set `vivid.runtimePath` to a local build
-
-**Runtime crashes on start**
-- Check Output → Vivid for error messages
-- Try reinstalling: "Vivid: Reinstall Runtime"
-- Report issues at [vivid/issues](https://github.com/seethroughlab/vivid/issues)
-
-## Development
-
-```bash
-# Watch mode (auto-recompile on changes)
-npm run watch
-
-# Lint
-npm run lint
-
-# Package as VSIX
-npm run package
+# Press F5 in VS Code
 ```
 
 ## License
