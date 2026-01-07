@@ -91,10 +91,10 @@ export function activate(context: vscode.ExtensionContext) {
     outputChannel = vscode.window.createOutputChannel('Vivid');
     runtimeManager = new RuntimeManager(outputChannel);
 
-    // Check vividPath setting
+    // Check vividRoot setting
     const config = vscode.workspace.getConfiguration('vivid');
-    const vividPath = config.get<string>('vividPath', '~/.vivid');
-    runtimeManager.setInstallDir(vividPath);
+    const vividRoot = config.get<string>('vividRoot', '~/.vivid');
+    runtimeManager.setInstallDir(vividRoot);
 
     // Set up operator catalog and library panel
     operatorCatalog = new OperatorCatalog();
@@ -116,12 +116,22 @@ export function activate(context: vscode.ExtensionContext) {
             runtimeManager.checkForUpdates();
         }),
 
-        vscode.commands.registerCommand('vivid.reinstallRuntime', () => {
-            runtimeManager.installOrUpdate(true);
+        vscode.commands.registerCommand('vivid.reinstallRuntime', async () => {
+            const success = await runtimeManager.installOrUpdate(true);
+            if (success) {
+                // After reinstall, ensure MCP config is correct
+                handleClaudeCodeSetup(runtimeManager.executablePath, outputChannel);
+                refreshOperatorCatalog();
+            }
         }),
 
-        vscode.commands.registerCommand('vivid.downloadRuntime', () => {
-            runtimeManager.ensureInstalled();
+        vscode.commands.registerCommand('vivid.downloadRuntime', async () => {
+            const success = await runtimeManager.ensureInstalled();
+            if (success) {
+                // After install, ensure MCP config is correct
+                handleClaudeCodeSetup(runtimeManager.executablePath, outputChannel);
+                refreshOperatorCatalog();
+            }
         }),
 
         vscode.commands.registerCommand('vivid.showOutput', () => {
@@ -539,9 +549,9 @@ export function activate(context: vscode.ExtensionContext) {
     // Listen for configuration changes
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration(async (e) => {
-            if (e.affectsConfiguration('vivid.vividPath')) {
+            if (e.affectsConfiguration('vivid.vividRoot')) {
                 const newConfig = vscode.workspace.getConfiguration('vivid');
-                const newVividPath = newConfig.get<string>('vividPath', '~/.vivid');
+                const newVividPath = newConfig.get<string>('vividRoot', '~/.vivid');
 
                 runtimeManager.setInstallDir(newVividPath);
                 outputChannel.appendLine(`Vivid path changed to: ${newVividPath}`);
@@ -561,7 +571,13 @@ export function activate(context: vscode.ExtensionContext) {
     if (!runtimeManager.isInstalled()) {
         const checkUpdates = config.get<boolean>('checkUpdatesOnStart', true);
         if (checkUpdates) {
-            runtimeManager.ensureInstalled();
+            runtimeManager.ensureInstalled().then((success) => {
+                if (success) {
+                    // After install, ensure MCP config is correct
+                    handleClaudeCodeSetup(runtimeManager.executablePath, outputChannel);
+                    refreshOperatorCatalog();
+                }
+            });
         }
     } else {
         // Check for updates on startup

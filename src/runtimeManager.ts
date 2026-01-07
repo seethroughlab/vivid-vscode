@@ -39,10 +39,13 @@ interface VersionInfo {
 export class RuntimeManager {
     private installDir: string;
     private outputChannel: vscode.OutputChannel;
+    private isCustomPath: boolean = false;
+    private readonly defaultInstallDir: string;
 
     constructor(outputChannel: vscode.OutputChannel) {
         this.outputChannel = outputChannel;
-        this.installDir = path.join(os.homedir(), '.vivid');
+        this.defaultInstallDir = path.join(os.homedir(), '.vivid');
+        this.installDir = this.defaultInstallDir;
     }
 
     /**
@@ -55,7 +58,8 @@ export class RuntimeManager {
             installDir = path.join(os.homedir(), installDir.slice(1));
         }
         this.installDir = installDir;
-        this.outputChannel.appendLine(`RuntimeManager: install dir set to ${installDir}`);
+        this.isCustomPath = installDir !== this.defaultInstallDir;
+        this.outputChannel.appendLine(`RuntimeManager: install dir set to ${installDir}${this.isCustomPath ? ' (custom path - updates disabled)' : ''}`);
     }
 
     /**
@@ -525,7 +529,7 @@ export class RuntimeManager {
                 }
 
                 const config = vscode.workspace.getConfiguration('vivid');
-                await config.update('vividPath', selectedPath, vscode.ConfigurationTarget.Global);
+                await config.update('vividRoot', selectedPath, vscode.ConfigurationTarget.Global);
                 this.setInstallDir(selectedPath);
                 return true;
             }
@@ -569,9 +573,16 @@ export class RuntimeManager {
     /**
      * Check for updates (called periodically or on command)
      * Auto-installs minor/patch updates, prompts for major updates
+     * Skips update checks when using a custom vividRoot path
      */
     async checkForUpdates(): Promise<void> {
         if (!this.isInstalled()) {
+            return;
+        }
+
+        // Don't check for updates when using a custom path - the user is managing it themselves
+        if (this.isCustomPath) {
+            this.outputChannel.appendLine('Skipping update check: using custom vividRoot path');
             return;
         }
 
