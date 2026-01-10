@@ -1,7 +1,9 @@
 // Operator Library Panel - sidebar webview for browsing and adding operators
 
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { OperatorCatalog, OperatorDefinition } from './operatorCatalog';
+import { DoxygenParser, ParsedDoxygenDoc } from './doxygenParser';
 
 export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
     public static readonly viewType = 'vividOperatorLibrary';
@@ -10,10 +12,26 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
     private _catalog?: OperatorCatalog;
     private _isLoading = false;
     private _loadError?: string;
+    private _vividRoot: string = '';
+    private _doxygenParser: DoxygenParser = new DoxygenParser();
 
     private _onOperatorSelected: ((operator: OperatorDefinition) => void) | undefined;
 
     constructor(private readonly _extensionUri: vscode.Uri) {}
+
+    public setVividRoot(root: string): void {
+        this._vividRoot = root;
+    }
+
+    private async _loadDocsForOperator(operatorName: string): Promise<ParsedDoxygenDoc | null> {
+        const operator = this._catalog?.getOperator(operatorName);
+        if (!operator?.headerPath || !this._vividRoot) {
+            return null;
+        }
+
+        const absolutePath = path.join(this._vividRoot, operator.headerPath);
+        return this._doxygenParser.parseHeaderFile(absolutePath);
+    }
 
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
@@ -30,7 +48,7 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
         webviewView.webview.html = this._getHtmlContent();
 
         // Handle messages from the webview
-        webviewView.webview.onDidReceiveMessage(message => {
+        webviewView.webview.onDidReceiveMessage(async message => {
             switch (message.type) {
                 case 'selectOperator':
                     const operator = this._catalog?.getOperator(message.name);
@@ -41,6 +59,14 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
                 case 'refresh':
                     // Trigger a refresh of the catalog
                     vscode.commands.executeCommand('vivid.refreshOperatorLibrary');
+                    break;
+                case 'requestDocs':
+                    const docs = await this._loadDocsForOperator(message.operatorName);
+                    this._view?.webview.postMessage({
+                        type: 'docsLoaded',
+                        operatorName: message.operatorName,
+                        docs: docs
+                    });
                     break;
             }
         });
@@ -344,6 +370,52 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
             font-size: 11px;
             overflow-x: auto;
         }
+        .doc-code-example {
+            font-family: var(--vscode-editor-font-family, monospace);
+            background: var(--vscode-textCodeBlock-background);
+            padding: 10px;
+            border-radius: 4px;
+            white-space: pre;
+            font-size: 11px;
+            overflow-x: auto;
+            line-height: 1.4;
+        }
+        .doc-inputs {
+            margin: 8px 0;
+        }
+        .doc-input-item {
+            display: flex;
+            gap: 8px;
+            margin: 4px 0;
+            padding: 4px 8px;
+            background: var(--vscode-sideBar-background);
+            border-radius: 3px;
+        }
+        .doc-input-name {
+            font-weight: 500;
+            font-family: var(--vscode-editor-font-family, monospace);
+            min-width: 60px;
+            color: var(--vscode-symbolIcon-variableForeground);
+        }
+        .doc-input-desc {
+            opacity: 0.85;
+        }
+        .doc-see-also {
+            margin-top: 8px;
+        }
+        .doc-see-link {
+            color: var(--vscode-textLink-foreground);
+            cursor: pointer;
+            text-decoration: none;
+            margin-right: 8px;
+        }
+        .doc-see-link:hover {
+            text-decoration: underline;
+        }
+        .doc-loading {
+            opacity: 0.6;
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
@@ -363,6 +435,8 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
         let searchQuery = '';
         let collapsedCategories = new Set();
         let selectedOperator = null;
+        let docsCache = {};  // Cache for loaded documentation
+        let loadingDocs = new Set();  // Track which operators are loading docs
 
         // Restore state
         const state = vscode.getState() || {};
@@ -388,6 +462,16 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
                     break;
                 case 'empty':
                     showEmpty();
+                    break;
+                case 'docsLoaded':
+                    loadingDocs.delete(message.operatorName);
+                    if (message.docs) {
+                        docsCache[message.operatorName] = message.docs;
+                    }
+                    // Re-render if this operator is still selected
+                    if (selectedOperator === message.operatorName) {
+                        render();
+                    }
                     break;
             }
         });
@@ -514,6 +598,11 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
                 selectedOperator = null;
             } else {
                 selectedOperator = name;
+                // Request docs if not cached and not already loading
+                if (!docsCache[name] && !loadingDocs.has(name)) {
+                    loadingDocs.add(name);
+                    vscode.postMessage({ type: 'requestDocs', operatorName: name });
+                }
             }
             // Save state and re-render
             saveState();
@@ -529,6 +618,8 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
 
         function renderOperatorDetails(op) {
             let html = '<div class="operator-details">';
+            const docs = docsCache[op.name];
+            const isLoading = loadingDocs.has(op.name);
 
             // Output type and requires input
             html += '<div class="operator-details-row">';
@@ -537,6 +628,19 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
             html += '<div class="operator-details-row">';
             html += \`<span class="operator-details-label">Requires input:</span><span>\${op.requiresInput ? 'Yes' : 'No'}</span>\`;
             html += '</div>';
+
+            // Inputs section (from Doxygen docs)
+            if (docs && docs.inputs && docs.inputs.length > 0) {
+                html += '<h4>Inputs</h4>';
+                html += '<div class="doc-inputs">';
+                for (const input of docs.inputs) {
+                    html += '<div class="doc-input-item">';
+                    html += \`<span class="doc-input-name">\${escapeHtml(input.name)}</span>\`;
+                    html += \`<span class="doc-input-desc">\${escapeHtml(input.description)}</span>\`;
+                    html += '</div>';
+                }
+                html += '</div>';
+            }
 
             // Parameters
             if (op.params && op.params.length > 0) {
@@ -558,14 +662,34 @@ export class OperatorLibraryPanel implements vscode.WebviewViewProvider {
                 html += '<div style="opacity: 0.6; margin-top: 8px;">No parameters</div>';
             }
 
-            // Usage example
-            html += '<h4>Usage</h4>';
-            const varName = op.name.toLowerCase().charAt(0);
-            html += \`<div class="usage-code">auto& \${varName} = chain.add&lt;\${escapeHtml(op.name)}&gt;("\${varName}1");\`;
-            if (op.requiresInput) {
-                html += \`\\n\${varName}.input(&other);\`;
+            // Example section (from Doxygen docs or fallback to auto-generated)
+            html += '<h4>Example</h4>';
+            if (isLoading) {
+                html += '<div class="doc-loading">Loading documentation...</div>';
+            } else if (docs && docs.codeExamples && docs.codeExamples.length > 0) {
+                // Show code examples from header
+                for (const example of docs.codeExamples) {
+                    html += \`<div class="doc-code-example">\${escapeHtml(example)}</div>\`;
+                }
+            } else {
+                // Fallback to auto-generated usage
+                const varName = op.name.toLowerCase().charAt(0);
+                html += \`<div class="usage-code">auto& \${varName} = chain.add&lt;\${escapeHtml(op.name)}&gt;("\${varName}1");\`;
+                if (op.requiresInput) {
+                    html += \`\\n\${varName}.input(&other);\`;
+                }
+                html += '</div>';
             }
-            html += '</div>';
+
+            // See Also section (from Doxygen docs)
+            if (docs && docs.seeAlso && docs.seeAlso.length > 0) {
+                html += '<h4>See Also</h4>';
+                html += '<div class="doc-see-also">';
+                for (const ref of docs.seeAlso) {
+                    html += \`<span class="doc-see-link">\${escapeHtml(ref)}</span>\`;
+                }
+                html += '</div>';
+            }
 
             html += '</div>';
             return html;

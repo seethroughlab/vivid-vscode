@@ -21,6 +21,7 @@ export interface OperatorDefinition {
     requiresInput: boolean;
     outputType: string;
     params: OperatorParam[];
+    headerPath?: string;  // Relative path to header file for documentation
 }
 
 interface CatalogJson {

@@ -101,6 +101,7 @@ export function activate(context: vscode.ExtensionContext) {
     operatorCatalog.setOutputChannel(outputChannel);
 
     operatorLibraryPanel = new OperatorLibraryPanel(context.extensionUri);
+    operatorLibraryPanel.setVividRoot(runtimeManager.getInstallDir());
 
     // Register the webview view provider for the sidebar
     context.subscriptions.push(
@@ -554,6 +555,7 @@ export function activate(context: vscode.ExtensionContext) {
                 const newVividPath = newConfig.get<string>('vividRoot', '~/.vivid');
 
                 runtimeManager.setInstallDir(newVividPath);
+                operatorLibraryPanel.setVividRoot(runtimeManager.getInstallDir());
                 outputChannel.appendLine(`Vivid path changed to: ${newVividPath}`);
 
                 // Refresh operator catalog with new path
