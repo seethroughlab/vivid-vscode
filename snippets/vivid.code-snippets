@@ -1,0 +1,431 @@
+{
+  // ============================================================
+  // CHAIN SETUP
+  // ============================================================
+  "Vivid Chain Boilerplate": {
+    "prefix": ["vivid-chain", "chain-setup"],
+    "body": [
+      "#include <vivid/vivid.h>",
+      "#include <vivid/effects/effects.h>",
+      "",
+      "using namespace vivid;",
+      "using namespace vivid::effects;",
+      "",
+      "void setup(Context& ctx) {",
+      "    auto& chain = ctx.chain();",
+      "",
+      "    $0",
+      "",
+      "    chain.output(\"${1:output}\");",
+      "}",
+      "",
+      "void update(Context& ctx) {",
+      "    // Animation code here",
+      "}",
+      "",
+      "VIVID_CHAIN(setup, update)"
+    ],
+    "description": "Complete Vivid chain.cpp boilerplate"
+  },
+
+  "Vivid 3D Chain Boilerplate": {
+    "prefix": ["vivid-3d", "chain-3d"],
+    "body": [
+      "#include <vivid/vivid.h>",
+      "#include <vivid/effects/effects.h>",
+      "#include <vivid/render3d/render3d.h>",
+      "",
+      "using namespace vivid;",
+      "using namespace vivid::effects;",
+      "using namespace vivid::render3d;",
+      "",
+      "void setup(Context& ctx) {",
+      "    auto& chain = ctx.chain();",
+      "",
+      "    // Scene",
+      "    auto& scene = SceneComposer::create(chain, \"scene\");",
+      "    $0",
+      "",
+      "    // Camera",
+      "    auto& camera = chain.add<CameraOperator>(\"camera\");",
+      "    camera.orbitCenter(0.0f, 0.0f, 0.0f);",
+      "    camera.distance(8.0f);",
+      "",
+      "    // Light",
+      "    auto& sun = chain.add<DirectionalLight>(\"sun\");",
+      "    sun.direction(1, 2, 1);",
+      "",
+      "    // Renderer",
+      "    auto& render = chain.add<Render3D>(\"render\");",
+      "    render.setInput(&scene);",
+      "    render.setCameraInput(&camera);",
+      "    render.setLightInput(&sun);",
+      "",
+      "    chain.output(\"render\");",
+      "}",
+      "",
+      "void update(Context& ctx) {",
+      "    auto& chain = ctx.chain();",
+      "    float time = static_cast<float>(ctx.time());",
+      "",
+      "    auto& camera = chain.get<CameraOperator>(\"camera\");",
+      "    camera.azimuth(time * 0.2f);",
+      "}",
+      "",
+      "VIVID_CHAIN(setup, update)"
+    ],
+    "description": "Complete Vivid 3D chain.cpp boilerplate with scene, camera, light, renderer"
+  },
+
+  // ============================================================
+  // GENERATORS
+  // ============================================================
+  "Noise Operator": {
+    "prefix": ["noise", "vivid-noise"],
+    "body": [
+      "auto& ${1:noise} = chain.add<Noise>(\"${1:noise}\");",
+      "${1:noise}.scale = ${2:4.0f};",
+      "${1:noise}.octaves = ${3:4};",
+      "${1:noise}.speed = ${4:0.5f};"
+    ],
+    "description": "Add a Noise texture generator"
+  },
+
+  "Gradient Operator": {
+    "prefix": ["gradient", "vivid-gradient"],
+    "body": [
+      "auto& ${1:gradient} = chain.add<Gradient>(\"${1:gradient}\");",
+      "${1:gradient}.setColors(",
+      "    Color::fromHex(\"${2:#ff0000}\"),",
+      "    Color::fromHex(\"${3:#0000ff}\")",
+      ");",
+      "${1:gradient}.angle = ${4:0.0f};"
+    ],
+    "description": "Add a Gradient generator"
+  },
+
+  "SolidColor Operator": {
+    "prefix": ["solid", "solid-color", "vivid-solid"],
+    "body": [
+      "auto& ${1:solid} = chain.add<SolidColor>(\"${1:solid}\");",
+      "${1:solid}.setColor(${2:1.0f}, ${3:0.5f}, ${4:0.0f}, ${5:1.0f});"
+    ],
+    "description": "Add a SolidColor generator"
+  },
+
+  "Image Operator": {
+    "prefix": ["image", "vivid-image"],
+    "body": [
+      "auto& ${1:image} = chain.add<Image>(\"${1:image}\");",
+      "${1:image}.load(\"assets/${2:texture.png}\");"
+    ],
+    "description": "Load an image texture"
+  },
+
+  // ============================================================
+  // EFFECTS
+  // ============================================================
+  "Blur Operator": {
+    "prefix": ["blur", "vivid-blur"],
+    "body": [
+      "auto& ${1:blur} = chain.add<Blur>(\"${1:blur}\");",
+      "${1:blur}.input(\"${2:source}\");",
+      "${1:blur}.radius = ${3:10.0f};"
+    ],
+    "description": "Add a Blur effect"
+  },
+
+  "Brightness Operator": {
+    "prefix": ["brightness", "vivid-brightness"],
+    "body": [
+      "auto& ${1:bright} = chain.add<Brightness>(\"${1:bright}\");",
+      "${1:bright}.input(\"${2:source}\");",
+      "${1:bright}.brightness = ${3:1.2f};"
+    ],
+    "description": "Add a Brightness adjustment"
+  },
+
+  "Contrast Operator": {
+    "prefix": ["contrast", "vivid-contrast"],
+    "body": [
+      "auto& ${1:contrast} = chain.add<Contrast>(\"${1:contrast}\");",
+      "${1:contrast}.input(\"${2:source}\");",
+      "${1:contrast}.contrast = ${3:1.5f};"
+    ],
+    "description": "Add a Contrast adjustment"
+  },
+
+  "HSV Operator": {
+    "prefix": ["hsv", "vivid-hsv"],
+    "body": [
+      "auto& ${1:hsv} = chain.add<HSV>(\"${1:hsv}\");",
+      "${1:hsv}.input(\"${2:source}\");",
+      "${1:hsv}.hueShift = ${3:0.0f};",
+      "${1:hsv}.saturation = ${4:1.0f};",
+      "${1:hsv}.value = ${5:1.0f};"
+    ],
+    "description": "Add an HSV color adjustment"
+  },
+
+  "Displace Operator": {
+    "prefix": ["displace", "vivid-displace"],
+    "body": [
+      "auto& ${1:displace} = chain.add<Displace>(\"${1:displace}\");",
+      "${1:displace}.setInput(\"${2:source}\");",
+      "${1:displace}.setDisplacementInput(\"${3:noise}\");",
+      "${1:displace}.strength = ${4:0.1f};"
+    ],
+    "description": "Add a displacement effect"
+  },
+
+  "Composite Operator": {
+    "prefix": ["composite", "blend", "vivid-composite"],
+    "body": [
+      "auto& ${1:comp} = chain.add<Composite>(\"${1:comp}\");",
+      "${1:comp}.setInputA(\"${2:layer1}\");",
+      "${1:comp}.setInputB(\"${3:layer2}\");",
+      "${1:comp}.setBlendMode(BlendMode::${4:Normal});",
+      "${1:comp}.opacity = ${5:1.0f};"
+    ],
+    "description": "Composite two textures together"
+  },
+
+  "Feedback Operator": {
+    "prefix": ["feedback", "vivid-feedback"],
+    "body": [
+      "auto& ${1:feedback} = chain.add<Feedback>(\"${1:feedback}\");",
+      "${1:feedback}.input(\"${2:source}\");",
+      "${1:feedback}.decay = ${3:0.95f};"
+    ],
+    "description": "Add a feedback/trail effect"
+  },
+
+  // ============================================================
+  // 3D PRIMITIVES
+  // ============================================================
+  "Box Primitive": {
+    "prefix": ["box", "cube", "vivid-box"],
+    "body": [
+      "auto& ${1:box} = chain.add<Box>(\"${1:box}\");",
+      "${1:box}.size(${2:1.0f}, ${3:1.0f}, ${4:1.0f});"
+    ],
+    "description": "Add a 3D box primitive"
+  },
+
+  "Sphere Primitive": {
+    "prefix": ["sphere", "vivid-sphere"],
+    "body": [
+      "auto& ${1:sphere} = chain.add<Sphere>(\"${1:sphere}\");",
+      "${1:sphere}.radius(${2:1.0f});",
+      "${1:sphere}.segments(${3:32});"
+    ],
+    "description": "Add a 3D sphere primitive"
+  },
+
+  "Cylinder Primitive": {
+    "prefix": ["cylinder", "vivid-cylinder"],
+    "body": [
+      "auto& ${1:cylinder} = chain.add<Cylinder>(\"${1:cylinder}\");",
+      "${1:cylinder}.radius(${2:0.5f});",
+      "${1:cylinder}.height(${3:2.0f});",
+      "${1:cylinder}.segments(${4:24});"
+    ],
+    "description": "Add a 3D cylinder primitive"
+  },
+
+  "Torus Primitive": {
+    "prefix": ["torus", "donut", "vivid-torus"],
+    "body": [
+      "auto& ${1:torus} = chain.add<Torus>(\"${1:torus}\");",
+      "${1:torus}.outerRadius(${2:1.0f});",
+      "${1:torus}.innerRadius(${3:0.3f});",
+      "${1:torus}.segments(${4:32});",
+      "${1:torus}.rings(${5:16});"
+    ],
+    "description": "Add a 3D torus primitive"
+  },
+
+  "Plane Primitive": {
+    "prefix": ["plane", "vivid-plane"],
+    "body": [
+      "auto& ${1:plane} = chain.add<Plane>(\"${1:plane}\");",
+      "${1:plane}.size(${2:10.0f}, ${3:10.0f});",
+      "${1:plane}.subdivisions(${4:1}, ${5:1});"
+    ],
+    "description": "Add a 3D plane primitive"
+  },
+
+  // ============================================================
+  // 3D SCENE
+  // ============================================================
+  "Scene Composer": {
+    "prefix": ["scene", "scene-composer", "vivid-scene"],
+    "body": [
+      "auto& ${1:scene} = SceneComposer::create(chain, \"${1:scene}\");",
+      "${1:scene}.add<${2:Box}>(\"${3:object}\",",
+      "    glm::translate(glm::mat4(1.0f), glm::vec3(${4:0.0f}, ${5:0.0f}, ${6:0.0f})),",
+      "    glm::vec4(${7:1.0f}, ${8:1.0f}, ${9:1.0f}, 1.0f));"
+    ],
+    "description": "Create a SceneComposer with an object"
+  },
+
+  "Camera Operator": {
+    "prefix": ["camera", "vivid-camera"],
+    "body": [
+      "auto& ${1:camera} = chain.add<CameraOperator>(\"${1:camera}\");",
+      "${1:camera}.orbitCenter(${2:0.0f}, ${3:0.0f}, ${4:0.0f});",
+      "${1:camera}.distance(${5:8.0f});",
+      "${1:camera}.elevation(${6:0.3f});",
+      "${1:camera}.fov(${7:50.0f});"
+    ],
+    "description": "Add an orbital camera"
+  },
+
+  "Directional Light": {
+    "prefix": ["directional-light", "sun", "vivid-light"],
+    "body": [
+      "auto& ${1:sun} = chain.add<DirectionalLight>(\"${1:sun}\");",
+      "${1:sun}.direction(${2:1}, ${3:2}, ${4:1});",
+      "${1:sun}.color(${5:1.0f}, ${6:1.0f}, ${7:1.0f});",
+      "${1:sun}.intensity = ${8:1.0f};"
+    ],
+    "description": "Add a directional light"
+  },
+
+  "Point Light": {
+    "prefix": ["point-light", "vivid-point-light"],
+    "body": [
+      "auto& ${1:light} = chain.add<PointLight>(\"${1:light}\");",
+      "${1:light}.position(${2:0.0f}, ${3:2.0f}, ${4:0.0f});",
+      "${1:light}.color(${5:1.0f}, ${6:0.8f}, ${7:0.6f});",
+      "${1:light}.intensity = ${8:2.0f};",
+      "${1:light}.radius = ${9:10.0f};"
+    ],
+    "description": "Add a point light"
+  },
+
+  "Render3D Operator": {
+    "prefix": ["render3d", "renderer", "vivid-render3d"],
+    "body": [
+      "auto& ${1:render} = chain.add<Render3D>(\"${1:render}\");",
+      "${1:render}.setInput(&${2:scene});",
+      "${1:render}.setCameraInput(&${3:camera});",
+      "${1:render}.setLightInput(&${4:sun});",
+      "${1:render}.setShadingMode(ShadingMode::${5:PBR});",
+      "${1:render}.setAmbient(${6:0.2f});"
+    ],
+    "description": "Add a 3D renderer"
+  },
+
+  // ============================================================
+  // AUDIO
+  // ============================================================
+  "Audio Output": {
+    "prefix": ["audio-output", "speakers", "vivid-audio-out"],
+    "body": [
+      "auto& ${1:out} = chain.add<AudioOutput>(\"${1:out}\");",
+      "${1:out}.setInput(\"${2:source}\");",
+      "chain.audioOutput(\"${1:out}\");"
+    ],
+    "description": "Add audio output (speakers)"
+  },
+
+  "Oscillator": {
+    "prefix": ["oscillator", "osc", "vivid-osc"],
+    "body": [
+      "auto& ${1:osc} = chain.add<Oscillator>(\"${1:osc}\");",
+      "${1:osc}.frequency = ${2:440.0f};",
+      "${1:osc}.waveform = Waveform::${3:Sine};"
+    ],
+    "description": "Add an audio oscillator"
+  },
+
+  "Audio File": {
+    "prefix": ["audio-file", "sample", "vivid-audio-file"],
+    "body": [
+      "auto& ${1:audio} = chain.add<AudioFile>(\"${1:audio}\");",
+      "${1:audio}.load(\"assets/${2:sound.wav}\");",
+      "${1:audio}.loop = ${3:true};"
+    ],
+    "description": "Load and play an audio file"
+  },
+
+  "FFT Analyzer": {
+    "prefix": ["fft", "spectrum", "vivid-fft"],
+    "body": [
+      "auto& ${1:fft} = chain.add<FFT>(\"${1:fft}\");",
+      "${1:fft}.setInput(\"${2:audio}\");",
+      "${1:fft}.smoothing = ${3:0.8f};"
+    ],
+    "description": "Add FFT spectrum analyzer"
+  },
+
+  // ============================================================
+  // VIDEO
+  // ============================================================
+  "Video Player": {
+    "prefix": ["video", "video-player", "vivid-video"],
+    "body": [
+      "auto& ${1:video} = chain.add<VideoPlayer>(\"${1:video}\");",
+      "${1:video}.load(\"assets/${2:video.mp4}\");",
+      "${1:video}.loop = ${3:true};"
+    ],
+    "description": "Add a video player"
+  },
+
+  "Webcam": {
+    "prefix": ["webcam", "camera-input", "vivid-webcam"],
+    "body": [
+      "auto& ${1:webcam} = chain.add<Webcam>(\"${1:webcam}\");",
+      "${1:webcam}.deviceIndex = ${2:0};"
+    ],
+    "description": "Add webcam input"
+  },
+
+  // ============================================================
+  // COMMON PATTERNS
+  // ============================================================
+  "Add Operator": {
+    "prefix": ["add", "chain-add"],
+    "body": [
+      "auto& ${1:name} = chain.add<${2:Operator}>(\"${1:name}\");"
+    ],
+    "description": "Add an operator to the chain"
+  },
+
+  "Get Operator": {
+    "prefix": ["get", "chain-get"],
+    "body": [
+      "auto& ${1:name} = chain.get<${2:Operator}>(\"${1:name}\");"
+    ],
+    "description": "Get an operator from the chain by name"
+  },
+
+  "Set Input": {
+    "prefix": ["input", "set-input"],
+    "body": [
+      "${1:operator}.input(\"${2:source}\");"
+    ],
+    "description": "Set operator input by name"
+  },
+
+  "VIVID_CHAIN Macro": {
+    "prefix": ["vivid-macro", "chain-macro"],
+    "body": [
+      "VIVID_CHAIN(setup, update)"
+    ],
+    "description": "VIVID_CHAIN entry point macro"
+  },
+
+  "VIVID_CHAIN_CONFIG Macro": {
+    "prefix": ["vivid-config", "chain-config"],
+    "body": [
+      "VIVID_CHAIN_CONFIG(setup, update, (vivid::ChainConfig{",
+      "    .windowWidth = ${1:1920},",
+      "    .windowHeight = ${2:1080},",
+      "    .resizable = ${3:true}",
+      "}))"
+    ],
+    "description": "VIVID_CHAIN_CONFIG entry point with window configuration"
+  }
+}

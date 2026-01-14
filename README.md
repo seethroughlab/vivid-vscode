@@ -7,7 +7,7 @@ VS Code support for the [Vivid](https://github.com/seethroughlab/vivid) creative
 - **Auto-Download Runtime**: Automatically downloads the Vivid runtime on first use
 - **Operator Library**: Browse available operators in the sidebar with inline documentation
 - **WGSL Language Support**: Syntax highlighting for shader files
-- **Claude Code Integration**: MCP server for AI-assisted creative coding
+- **Claude Code Integration**: Works with Vivid MCP server for AI-assisted creative coding
 
 ## Installation
 
@@ -46,6 +46,41 @@ The extension will automatically download the Vivid runtime when you first use i
 |---------|---------|-------------|
 | `vivid.vividRoot` | `""` | Path to vivid source root (for development builds). Leave empty to use auto-downloaded runtime. |
 | `vivid.checkUpdatesOnStart` | `true` | Check for runtime updates on activation |
+
+## Claude Code Integration
+
+The extension works alongside the Vivid MCP server for AI-assisted creative coding. Here's how the components work together:
+
+| Component | Responsibility |
+|-----------|---------------|
+| **VS Code Extension** | Start Vivid projects (`Vivid: Run Project`), browse operators, syntax highlighting |
+| **Vivid MCP Server** | Query/control running Vivid (parameters, capture frames, check compile status) |
+| **Claude Code** | Edit chain.cpp, apply slider changes, verify compilation |
+
+### Workflow
+
+1. **User** starts Vivid: `Vivid: Run Project` command or terminal
+2. **User** adjusts sliders in the chain visualizer UI (preview updates live)
+3. **Claude** calls `get_pending_changes` to see slider adjustments
+4. **Claude** edits chain.cpp with the new parameter values
+5. **Claude** calls `get_runtime_status` to verify hot-reload succeeded
+6. **Claude** calls `capture_frame` to visually verify changes
+
+### Setup
+
+Configure Claude Code to use the Vivid MCP server. Add to `~/.claude.json`:
+```json
+{
+  "mcpServers": {
+    "vivid": {
+      "command": "/path/to/vivid",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Or use the `Vivid: Configure Claude Code Integration` command for guided setup.
 
 ## Views
 

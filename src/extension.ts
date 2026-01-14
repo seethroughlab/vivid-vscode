@@ -18,6 +18,10 @@ import { RuntimeManager } from './runtimeManager';
 import { OperatorCatalog } from './operatorCatalog';
 import { OperatorLibraryPanel } from './operatorLibraryPanel';
 import { handleClaudeCodeSetup, ensureClaudeCodeConfig } from './claudeCodeIntegration';
+import { StatusBarManager } from './statusBar';
+import { DiagnosticsManager } from './diagnostics';
+import { CompletionProvider } from './completion';
+import { PendingChangesPanel } from './pendingChangesPanel';
 
 /**
  * Find a Vivid project path from context:
@@ -86,6 +90,9 @@ let runtimeManager: RuntimeManager;
 let outputChannel: vscode.OutputChannel;
 let operatorCatalog: OperatorCatalog;
 let operatorLibraryPanel: OperatorLibraryPanel;
+let statusBarManager: StatusBarManager;
+let diagnosticsManager: DiagnosticsManager;
+let pendingChangesPanel: PendingChangesPanel;
 
 export function activate(context: vscode.ExtensionContext) {
     outputChannel = vscode.window.createOutputChannel('Vivid');
@@ -111,10 +118,45 @@ export function activate(context: vscode.ExtensionContext) {
         )
     );
 
+    // Initialize status bar and diagnostics
+    statusBarManager = new StatusBarManager(outputChannel);
+    diagnosticsManager = new DiagnosticsManager(statusBarManager);
+    context.subscriptions.push(statusBarManager);
+    context.subscriptions.push(diagnosticsManager);
+
+    // Initialize pending changes panel
+    pendingChangesPanel = new PendingChangesPanel(
+        context.extensionUri,
+        context.extensionPath,
+        statusBarManager,
+        outputChannel
+    );
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(
+            PendingChangesPanel.viewType,
+            pendingChangesPanel
+        )
+    );
+    context.subscriptions.push(pendingChangesPanel);
+
+    // Register completion provider for C++ files
+    const completionProvider = new CompletionProvider(operatorCatalog);
+    context.subscriptions.push(
+        vscode.languages.registerCompletionItemProvider(
+            { language: 'cpp', pattern: '**/chain.cpp' },
+            completionProvider,
+            '<', '.', '"'  // Trigger characters
+        )
+    );
+
     // Register commands
     context.subscriptions.push(
         vscode.commands.registerCommand('vivid.checkForUpdates', () => {
             runtimeManager.checkForUpdates();
+        }),
+
+        vscode.commands.registerCommand('vivid.statusBarClick', () => {
+            statusBarManager.handleStatusBarClick();
         }),
 
         vscode.commands.registerCommand('vivid.reinstallRuntime', async () => {
@@ -325,7 +367,7 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }),
 
-        vscode.commands.registerCommand('vivid.runProject', async () => {
+        vscode.commands.registerCommand('vivid.runProject', async (options?: { quick?: boolean }) => {
             if (!runtimeManager.isInstalled()) {
                 vscode.window.showWarningMessage('Vivid runtime not installed. Install it first.');
                 return;
@@ -336,45 +378,50 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            // Show run options
-            const runOptions = [
-                { label: '$(play) Run', description: 'Run with default settings', args: [] },
-                { label: '$(screen-full) Fullscreen', description: 'Run in fullscreen mode', args: ['--fullscreen'] },
-                { label: '$(symbol-structure) Show UI', description: 'Run with chain visualizer', args: ['--show-ui'] },
-                { label: '$(window) Custom Size...', description: 'Specify window size', args: ['custom'] }
-            ];
-
-            const selected = await vscode.window.showQuickPick(runOptions, {
-                placeHolder: 'How to run the project?',
-                title: 'Run Vivid Project'
-            });
-
-            if (!selected) {
-                return;
-            }
-
             let args: string[] = [projectPath];
 
-            if (selected.args[0] === 'custom') {
-                const sizeInput = await vscode.window.showInputBox({
-                    prompt: 'Enter window size (e.g., 1920x1080)',
-                    placeHolder: '1280x720',
-                    validateInput: (value) => {
-                        if (!value) {
-                            return null; // Allow empty for default
-                        }
-                        if (!/^\d+x\d+$/i.test(value)) {
-                            return 'Format: WIDTHxHEIGHT (e.g., 1920x1080)';
-                        }
-                        return null;
-                    }
+            // Quick mode: skip menu, run with --show-ui
+            if (options?.quick) {
+                args.push('--show-ui');
+            } else {
+                // Show run options
+                const runOptions = [
+                    { label: '$(play) Run', description: 'Run with default settings', args: [] as string[] },
+                    { label: '$(screen-full) Fullscreen', description: 'Run in fullscreen mode', args: ['--fullscreen'] },
+                    { label: '$(symbol-structure) Show UI', description: 'Run with chain visualizer', args: ['--show-ui'] },
+                    { label: '$(window) Custom Size...', description: 'Specify window size', args: ['custom'] }
+                ];
+
+                const selected = await vscode.window.showQuickPick(runOptions, {
+                    placeHolder: 'How to run the project?',
+                    title: 'Run Vivid Project'
                 });
 
-                if (sizeInput) {
-                    args.push('--window', sizeInput);
+                if (!selected) {
+                    return;
                 }
-            } else {
-                args = args.concat(selected.args);
+
+                if (selected.args[0] === 'custom') {
+                    const sizeInput = await vscode.window.showInputBox({
+                        prompt: 'Enter window size (e.g., 1920x1080)',
+                        placeHolder: '1280x720',
+                        validateInput: (value) => {
+                            if (!value) {
+                                return null; // Allow empty for default
+                            }
+                            if (!/^\d+x\d+$/i.test(value)) {
+                                return 'Format: WIDTHxHEIGHT (e.g., 1920x1080)';
+                            }
+                            return null;
+                        }
+                    });
+
+                    if (sizeInput) {
+                        args.push('--window', sizeInput);
+                    }
+                } else {
+                    args = args.concat(selected.args);
+                }
             }
 
             // Create terminal and run

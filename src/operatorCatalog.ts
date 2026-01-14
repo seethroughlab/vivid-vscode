@@ -2,6 +2,7 @@
 
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
+import { loadOperatorExample, OperatorExample } from './headerParser';
 
 export interface OperatorParam {
     name: string;
@@ -34,6 +35,8 @@ export class OperatorCatalog {
     private categoriesCache: string[] = [];
     private loaded = false;
     private outputChannel: vscode.OutputChannel | undefined;
+    private runtimePath: string = '';
+    private examplesCache: Map<string, OperatorExample | null> = new Map();
 
     setOutputChannel(channel: vscode.OutputChannel): void {
         this.outputChannel = channel;
@@ -79,14 +82,24 @@ export class OperatorCatalog {
                 }
 
                 try {
-                    const json: CatalogJson = JSON.parse(stdout);
+                    // Extract JSON from output (skip any warning lines before the JSON)
+                    let jsonStr = stdout;
+                    const jsonStart = stdout.indexOf('{');
+                    if (jsonStart > 0) {
+                        jsonStr = stdout.substring(jsonStart);
+                    }
+
+                    const json: CatalogJson = JSON.parse(jsonStr);
                     this.operators = json.operators;
                     this.categoriesCache = this.computeCategories();
                     this.loaded = true;
+                    this.runtimePath = runtimePath;
+                    this.examplesCache.clear();
                     this.log(`[OperatorCatalog] Loaded ${this.operators.length} operators in ${this.categoriesCache.length} categories`);
                     resolve(true);
                 } catch (e) {
                     this.log(`[OperatorCatalog] Error parsing JSON: ${e}`);
+                    this.log(`[OperatorCatalog] stdout was: ${stdout.substring(0, 500)}`);
                     resolve(false);
                 }
             });
@@ -185,5 +198,61 @@ export class OperatorCatalog {
                 ? `Parameters: ${op.params.map(p => p.name).join(', ')}`
                 : 'No parameters'
         }));
+    }
+
+    /**
+     * Get the runtime path
+     */
+    getRuntimePath(): string {
+        return this.runtimePath;
+    }
+
+    /**
+     * Get the example code for an operator (lazy loading with cache)
+     */
+    async getOperatorExample(operatorName: string): Promise<OperatorExample | null> {
+        // Check cache first
+        if (this.examplesCache.has(operatorName)) {
+            return this.examplesCache.get(operatorName) || null;
+        }
+
+        // Find the operator
+        const op = this.getOperator(operatorName);
+        if (!op || !op.headerPath || !this.runtimePath) {
+            this.examplesCache.set(operatorName, null);
+            return null;
+        }
+
+        // Load from header
+        const example = await loadOperatorExample(
+            this.runtimePath,
+            op.headerPath,
+            operatorName
+        );
+
+        this.examplesCache.set(operatorName, example);
+
+        if (example) {
+            this.log(`[OperatorCatalog] Loaded example for ${operatorName}`);
+        }
+
+        return example;
+    }
+
+    /**
+     * Load examples for all operators (for bulk operations like generating snippets)
+     */
+    async loadAllExamples(): Promise<Map<string, OperatorExample>> {
+        const examples = new Map<string, OperatorExample>();
+
+        for (const op of this.operators) {
+            const example = await this.getOperatorExample(op.name);
+            if (example) {
+                examples.set(op.name, example);
+            }
+        }
+
+        this.log(`[OperatorCatalog] Loaded ${examples.size} examples from headers`);
+        return examples;
     }
 }
