@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import WebSocket from 'ws';
+import { getMcpEnabledStatus, McpEnabledStatus } from './claudeCodeIntegration';
 
 export interface CompileError {
     file: string;
@@ -37,13 +38,19 @@ type StateChangeCallback = (state: VividState) => void;
 
 export class StatusBarManager {
     private statusBarItem: vscode.StatusBarItem;
+    private mcpStatusBarItem: vscode.StatusBarItem;
     private ws: WebSocket | null = null;
     private reconnectTimer: NodeJS.Timeout | null = null;
+    private mcpCheckTimer: NodeJS.Timeout | null = null;
     private state: VividState = {
         connected: false,
         compileStatus: null,
         operators: [],
         pendingChanges: []
+    };
+    private mcpStatus: McpEnabledStatus = {
+        configured: false,
+        enabled: false
     };
     private stateChangeCallbacks: StateChangeCallback[] = [];
     private disposed = false;
@@ -51,6 +58,8 @@ export class StatusBarManager {
 
     constructor(outputChannel: vscode.OutputChannel) {
         this.outputChannel = outputChannel;
+
+        // Runtime status bar item (left)
         this.statusBarItem = vscode.window.createStatusBarItem(
             vscode.StatusBarAlignment.Left,
             100
@@ -58,6 +67,19 @@ export class StatusBarManager {
         this.statusBarItem.command = 'vivid.statusBarClick';
         this.updateStatusBar();
         this.statusBarItem.show();
+
+        // MCP status bar item (right of runtime status)
+        this.mcpStatusBarItem = vscode.window.createStatusBarItem(
+            vscode.StatusBarAlignment.Left,
+            99
+        );
+        this.mcpStatusBarItem.command = 'vivid.mcpStatusBarClick';
+        this.updateMcpStatusBar();
+        this.mcpStatusBarItem.show();
+
+        // Check MCP status now and when workspace changes
+        this.checkMcpStatus();
+        vscode.workspace.onDidChangeWorkspaceFolders(() => this.checkMcpStatus());
 
         // Start connection attempts
         this.connect();
@@ -238,6 +260,73 @@ export class StatusBarManager {
         }
     }
 
+    private async checkMcpStatus() {
+        if (this.disposed) return;
+
+        const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        this.mcpStatus = await getMcpEnabledStatus(workspacePath);
+        this.updateMcpStatusBar();
+
+        // Log status for debugging
+        if (!this.mcpStatus.enabled && this.mcpStatus.disabledReason) {
+            this.outputChannel.appendLine(`[MCP Status] ${this.mcpStatus.disabledReason}`);
+        }
+    }
+
+    private updateMcpStatusBar() {
+        if (!this.mcpStatus.configured) {
+            // MCP not configured at all
+            this.mcpStatusBarItem.text = '$(debug-disconnect) MCP';
+            this.mcpStatusBarItem.backgroundColor = undefined;
+            this.mcpStatusBarItem.tooltip = 'Vivid MCP not configured - Click to set up';
+        } else if (!this.mcpStatus.enabled) {
+            // MCP configured but disabled for this project
+            this.mcpStatusBarItem.text = '$(warning) MCP';
+            this.mcpStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+            this.mcpStatusBarItem.tooltip = `MCP disabled: ${this.mcpStatus.disabledReason}\nClick to enable`;
+        } else {
+            // MCP configured and enabled
+            this.mcpStatusBarItem.text = '$(link) MCP';
+            this.mcpStatusBarItem.backgroundColor = undefined;
+            this.mcpStatusBarItem.tooltip = 'Vivid MCP enabled for Claude Code';
+        }
+    }
+
+    async handleMcpStatusBarClick() {
+        if (!this.mcpStatus.configured) {
+            // Offer to configure
+            const action = await vscode.window.showInformationMessage(
+                'Vivid MCP is not configured for Claude Code.',
+                'Configure Now',
+                'Learn More'
+            );
+            if (action === 'Configure Now') {
+                vscode.commands.executeCommand('vivid.configureClaudeCode');
+            } else if (action === 'Learn More') {
+                vscode.env.openExternal(vscode.Uri.parse('https://github.com/anthropics/claude-code'));
+            }
+        } else if (!this.mcpStatus.enabled) {
+            // Show warning about disabled state
+            const action = await vscode.window.showWarningMessage(
+                `Vivid MCP is disabled for this project.\n${this.mcpStatus.disabledReason}`,
+                'Open Claude Config',
+                'Run /mcp in Claude Code'
+            );
+            if (action === 'Open Claude Config') {
+                const configPath = require('path').join(require('os').homedir(), '.claude.json');
+                const doc = await vscode.workspace.openTextDocument(configPath);
+                await vscode.window.showTextDocument(doc);
+            } else if (action === 'Run /mcp in Claude Code') {
+                vscode.window.showInformationMessage(
+                    'In Claude Code, type /mcp to manage MCP server settings for this project.'
+                );
+            }
+        } else {
+            // Show status
+            vscode.window.showInformationMessage('Vivid MCP is configured and enabled for Claude Code.');
+        }
+    }
+
     async handleStatusBarClick() {
         if (this.state.connected) {
             if (this.state.compileStatus?.success === false) {
@@ -268,9 +357,13 @@ export class StatusBarManager {
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
         }
+        if (this.mcpCheckTimer) {
+            clearTimeout(this.mcpCheckTimer);
+        }
         if (this.ws) {
             this.ws.close();
         }
         this.statusBarItem.dispose();
+        this.mcpStatusBarItem.dispose();
     }
 }

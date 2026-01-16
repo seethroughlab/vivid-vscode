@@ -159,6 +159,10 @@ export function activate(context: vscode.ExtensionContext) {
             statusBarManager.handleStatusBarClick();
         }),
 
+        vscode.commands.registerCommand('vivid.mcpStatusBarClick', () => {
+            statusBarManager.handleMcpStatusBarClick();
+        }),
+
         vscode.commands.registerCommand('vivid.reinstallRuntime', async () => {
             const success = await runtimeManager.installOrUpdate(true);
             if (success) {

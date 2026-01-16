@@ -30,6 +30,61 @@ interface ClaudeConfig {
 
 const CLAUDE_CONFIG_PATH = path.join(os.homedir(), '.claude.json');
 
+/** MCP enabled status for a project */
+export interface McpEnabledStatus {
+    configured: boolean;      // Is vivid MCP configured globally?
+    enabled: boolean;         // Is it enabled for this specific project?
+    disabledReason?: string;  // Why it's disabled (if applicable)
+}
+
+/**
+ * Check if Vivid MCP is enabled for a specific project path.
+ * This checks both global config and per-project disabled servers.
+ */
+export async function getMcpEnabledStatus(projectPath: string | undefined): Promise<McpEnabledStatus> {
+    try {
+        const config = await readClaudeConfig();
+
+        // Check if vivid is configured globally
+        if (!config?.mcpServers?.vivid) {
+            return {
+                configured: false,
+                enabled: false,
+                disabledReason: 'Vivid MCP not configured in ~/.claude.json'
+            };
+        }
+
+        // Check if disabled for this specific project
+        if (projectPath && config.projects) {
+            const projects = config.projects as Record<string, { disabledMcpServers?: string[] }>;
+
+            // Try exact match first, then check parent paths
+            for (const [configPath, projectConfig] of Object.entries(projects)) {
+                if (projectPath.startsWith(configPath) || configPath.startsWith(projectPath)) {
+                    if (projectConfig.disabledMcpServers?.includes('vivid')) {
+                        return {
+                            configured: true,
+                            enabled: false,
+                            disabledReason: `Disabled for project: ${configPath}`
+                        };
+                    }
+                }
+            }
+        }
+
+        return {
+            configured: true,
+            enabled: true
+        };
+    } catch (error) {
+        return {
+            configured: false,
+            enabled: false,
+            disabledReason: 'Failed to read Claude config'
+        };
+    }
+}
+
 /**
  * Read the Claude Code configuration file
  */
