@@ -48,6 +48,7 @@ export interface ParamInfo {
     stringValue?: string;
     fileFilter?: string;
     fileCategory?: string;
+    enumLabels?: string[];
 }
 
 export interface VividState {
@@ -256,13 +257,15 @@ export class StatusBarManager {
     }
 
     // Set a parameter value immediately (sends to Vivid runtime)
-    setParamImmediate(operator: string, param: string, value: number | number[]) {
+    // trackPending: if true, also creates a pending change for code commit
+    setParamImmediate(operator: string, param: string, value: number | number[], trackPending = true) {
         const valueArray = Array.isArray(value) ? value : [value];
         this.send({
             type: 'set_param_immediate',
             operator,
             param,
-            value: valueArray
+            value: valueArray,
+            trackPending
         });
     }
 
@@ -330,7 +333,8 @@ export class StatusBarManager {
                     max: p.max ?? 1,
                     stringValue: p.stringValue,
                     fileFilter: p.fileFilter,
-                    fileCategory: p.fileCategory
+                    fileCategory: p.fileCategory,
+                    enumLabels: p.enumLabels
                 }));
                 this.notifyStateChange();
                 for (const callback of this.paramCallbacks) {

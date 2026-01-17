@@ -24,8 +24,8 @@ npm run esbuild
 echo "Packaging extension..."
 npm run package
 
-# Restore package.json to dev version
-git checkout package.json package-lock.json 2>/dev/null || true
+# Note: We no longer revert package.json to avoid losing manual changes
+# The dev version set above is kept
 
 VSIX_FILE=$(ls -t *.vsix 2>/dev/null | head -1)
 

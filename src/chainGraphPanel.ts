@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { StatusBarManager, VividState, ChainOperator, ParamInfo } from './statusBar';
+import { ParamInspectorPanel } from './paramInspectorPanel';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const ELK = require('elkjs/lib/elk.bundled.js');
 import type { ElkNode, ElkExtendedEdge } from 'elkjs';
@@ -15,11 +16,9 @@ export class ChainGraphPanel {
     private stateSubscription: vscode.Disposable | null = null;
     private chainStructureSubscription: vscode.Disposable | null = null;
     private soloStateSubscription: vscode.Disposable | null = null;
-    private paramsSubscription: vscode.Disposable | null = null;
     private operators: ChainOperator[] = [];
     private soloedOperator: string | null = null;
     private selectedOperator: string | null = null;
-    private params: ParamInfo[] = [];
     private disposed = false;
     private wasConnected = false;
 
@@ -80,18 +79,14 @@ export class ChainGraphPanel {
                         break;
                     case 'selectNode':
                         this.selectedOperator = message.name;
+                        // Notify the sidebar inspector
+                        ParamInspectorPanel.getInstance()?.selectOperator(message.name);
                         this.updateWebview();
                         break;
                     case 'deselectNode':
                         this.selectedOperator = null;
+                        ParamInspectorPanel.getInstance()?.selectOperator(null);
                         this.updateWebview();
-                        break;
-                    case 'setParam':
-                        this.statusBarManager.setParamImmediate(
-                            message.operator,
-                            message.param,
-                            message.value
-                        );
                         break;
                 }
             }
@@ -111,12 +106,6 @@ export class ChainGraphPanel {
         // Subscribe to solo state updates
         this.soloStateSubscription = statusBarManager.onSoloState((active, operatorName) => {
             this.soloedOperator = active ? operatorName : null;
-            this.updateWebview();
-        });
-
-        // Subscribe to param updates
-        this.paramsSubscription = statusBarManager.onParams((params) => {
-            this.params = params;
             this.updateWebview();
         });
     }
@@ -158,18 +147,12 @@ export class ChainGraphPanel {
         // Use ELK to layout the graph
         const layout = await this.calculateLayout();
 
-        // Filter params for selected operator
-        const selectedParams = this.selectedOperator
-            ? this.params.filter(p => p.operator === this.selectedOperator)
-            : [];
-
         this.panel.webview.postMessage({
             type: 'update',
             operators: this.operators,
             layout: layout,
             soloedOperator: this.soloedOperator,
-            selectedOperator: this.selectedOperator,
-            selectedParams: selectedParams
+            selectedOperator: this.selectedOperator
         });
     }
 
@@ -291,9 +274,6 @@ export class ChainGraphPanel {
         }
         if (this.soloStateSubscription) {
             this.soloStateSubscription.dispose();
-        }
-        if (this.paramsSubscription) {
-            this.paramsSubscription.dispose();
         }
 
         this.panel.dispose();
@@ -468,97 +448,6 @@ export class ChainGraphPanel {
             stroke-width: 3;
             stroke-dasharray: 5,3;
         }
-        .param-panel {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            width: 280px;
-            max-height: calc(100vh - 60px);
-            background: var(--vscode-sideBar-background);
-            border: 1px solid var(--vscode-editorWidget-border);
-            border-radius: 6px;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-        }
-        .param-panel-header {
-            padding: 10px 12px;
-            background: var(--vscode-sideBarSectionHeader-background);
-            border-bottom: 1px solid var(--vscode-editorWidget-border);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .param-panel-title {
-            font-weight: 600;
-            font-size: 13px;
-        }
-        .param-panel-close {
-            background: none;
-            border: none;
-            color: var(--vscode-foreground);
-            cursor: pointer;
-            padding: 2px 6px;
-            font-size: 16px;
-            opacity: 0.7;
-        }
-        .param-panel-close:hover {
-            opacity: 1;
-        }
-        .param-panel-content {
-            padding: 8px 0;
-            overflow-y: auto;
-            flex: 1;
-        }
-        .param-item {
-            padding: 6px 12px;
-        }
-        .param-label {
-            font-size: 11px;
-            color: var(--vscode-descriptionForeground);
-            margin-bottom: 4px;
-        }
-        .param-slider-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .param-slider {
-            flex: 1;
-            -webkit-appearance: none;
-            height: 4px;
-            background: var(--vscode-scrollbarSlider-background);
-            border-radius: 2px;
-            outline: none;
-        }
-        .param-slider::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            width: 14px;
-            height: 14px;
-            background: var(--vscode-button-background);
-            border-radius: 50%;
-            cursor: pointer;
-        }
-        .param-slider::-webkit-slider-thumb:hover {
-            background: var(--vscode-button-hoverBackground);
-        }
-        .param-value {
-            width: 50px;
-            text-align: right;
-            font-size: 11px;
-            font-family: var(--vscode-editor-font-family);
-            background: var(--vscode-input-background);
-            border: 1px solid var(--vscode-input-border);
-            color: var(--vscode-input-foreground);
-            padding: 2px 4px;
-            border-radius: 3px;
-        }
-        .param-empty {
-            padding: 20px 12px;
-            text-align: center;
-            color: var(--vscode-descriptionForeground);
-            font-size: 12px;
-        }
     </style>
 </head>
 <body>
@@ -590,13 +479,6 @@ export class ChainGraphPanel {
             <div class="legend-item"><div class="legend-dot geometry"></div>Geometry</div>
             <div class="legend-item"><div class="legend-dot cpupixels"></div>CpuPixels</div>
         </div>
-        <div class="param-panel" id="paramPanel" style="display: none;">
-            <div class="param-panel-header">
-                <span class="param-panel-title" id="paramPanelTitle">Parameters</span>
-                <button class="param-panel-close" onclick="deselectNode()">×</button>
-            </div>
-            <div class="param-panel-content" id="paramPanelContent"></div>
-        </div>
     </div>
 
     <script>
@@ -606,7 +488,6 @@ export class ChainGraphPanel {
         let layout = { nodes: [], edges: [] };
         let soloedOperator = null;
         let selectedOperator = null;
-        let selectedParams = [];
 
         function getNodeClass(outputType) {
             const type = (outputType || '').toLowerCase();
@@ -703,9 +584,6 @@ export class ChainGraphPanel {
                        '</g>';
             }).join('');
 
-            // Render param panel
-            renderParamPanel();
-
             // Update status
             status.textContent = operators.length + ' operator' + (operators.length === 1 ? '' : 's');
             if (soloedOperator) {
@@ -751,58 +629,6 @@ export class ChainGraphPanel {
             vscode.postMessage({ command: 'deselectNode' });
         }
 
-        function setParam(operator, param, value) {
-            vscode.postMessage({ command: 'setParam', operator, param, value });
-        }
-
-        function renderParamPanel() {
-            const panel = document.getElementById('paramPanel');
-            const title = document.getElementById('paramPanelTitle');
-            const content = document.getElementById('paramPanelContent');
-
-            if (!selectedOperator) {
-                panel.style.display = 'none';
-                return;
-            }
-
-            panel.style.display = 'flex';
-            title.textContent = selectedOperator;
-
-            if (selectedParams.length === 0) {
-                content.innerHTML = '<div class="param-empty">No parameters</div>';
-                return;
-            }
-
-            content.innerHTML = selectedParams.map(p => {
-                const val = p.value[0];
-                const min = p.min;
-                const max = p.max;
-                const displayVal = val.toFixed(2);
-
-                // Different controls based on param type
-                if (p.type === 'Bool') {
-                    const checked = val > 0.5 ? 'checked' : '';
-                    return '<div class="param-item">' +
-                        '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;">' +
-                        '<input type="checkbox" ' + checked + ' onchange="setParam(\\'' + selectedOperator + '\\', \\'' + p.name + '\\', this.checked ? 1 : 0)">' +
-                        '<span>' + p.name + '</span></label></div>';
-                }
-
-                // Default: slider for numeric types
-                return '<div class="param-item">' +
-                    '<div class="param-label">' + p.name + '</div>' +
-                    '<div class="param-slider-row">' +
-                    '<input type="range" class="param-slider" min="' + min + '" max="' + max + '" step="0.01" value="' + val + '" ' +
-                    'oninput="setParam(\\'' + selectedOperator + '\\', \\'' + p.name + '\\', parseFloat(this.value)); this.nextElementSibling.value = parseFloat(this.value).toFixed(2)">' +
-                    '<input type="text" class="param-value" value="' + displayVal + '" ' +
-                    'onchange="setParam(\\'' + selectedOperator + '\\', \\'' + p.name + '\\', parseFloat(this.value)); this.previousElementSibling.value = this.value">' +
-                    '</div></div>';
-            }).join('') +
-            '<div class="param-item" style="padding-top:12px;border-top:1px solid var(--vscode-editorWidget-border);margin-top:8px;">' +
-            '<button style="width:100%;padding:6px;background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);border:none;border-radius:4px;cursor:pointer;" ' +
-            'onclick="soloNode(\\'' + selectedOperator + '\\')">Solo Output</button></div>';
-        }
-
         window.addEventListener('message', event => {
             const message = event.data;
 
@@ -811,14 +637,12 @@ export class ChainGraphPanel {
                 layout = message.layout || { nodes: [], edges: [] };
                 soloedOperator = message.soloedOperator;
                 selectedOperator = message.selectedOperator;
-                selectedParams = message.selectedParams || [];
                 render();
             } else if (message.type === 'disconnected') {
                 operators = [];
                 layout = { nodes: [], edges: [] };
                 soloedOperator = null;
                 selectedOperator = null;
-                selectedParams = [];
                 render();
             }
         });

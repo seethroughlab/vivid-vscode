@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import { StatusBarManager, PendingChange, VividState } from './statusBar';
-import { initParser, findParamValue, applyParamChange } from './cppParser';
 
 export class PendingChangesPanel implements vscode.WebviewViewProvider {
     public static readonly viewType = 'vividPendingChanges';
@@ -10,24 +9,18 @@ export class PendingChangesPanel implements vscode.WebviewViewProvider {
     private stateSubscription: vscode.Disposable | null = null;
     private outputChannel: vscode.OutputChannel;
     private extensionUri: vscode.Uri;
-    private extensionPath: string;
-    private parserReady = false;
     private pendingChanges: PendingChange[] = [];
     private removedIndices: Set<number> = new Set();
 
     constructor(
         extensionUri: vscode.Uri,
-        extensionPath: string,
+        _extensionPath: string,
         statusBarManager: StatusBarManager,
         outputChannel: vscode.OutputChannel
     ) {
         this.extensionUri = extensionUri;
-        this.extensionPath = extensionPath;
         this.statusBarManager = statusBarManager;
         this.outputChannel = outputChannel;
-
-        // Initialize parser
-        this.initializeParser();
 
         // Subscribe to state changes
         this.stateSubscription = statusBarManager.onStateChange((state) => {
@@ -35,18 +28,9 @@ export class PendingChangesPanel implements vscode.WebviewViewProvider {
         });
     }
 
-    private async initializeParser() {
-        this.parserReady = await initParser(this.extensionPath);
-        if (this.parserReady) {
-            this.outputChannel.appendLine('[PendingChanges] Tree-sitter parser initialized');
-        } else {
-            this.outputChannel.appendLine('[PendingChanges] Warning: Tree-sitter parser failed to initialize');
-        }
-    }
-
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
-        context: vscode.WebviewViewResolveContext,
+        _context: vscode.WebviewViewResolveContext,
         _token: vscode.CancellationToken
     ) {
         this.view = webviewView;
@@ -58,11 +42,18 @@ export class PendingChangesPanel implements vscode.WebviewViewProvider {
 
         webviewView.webview.html = this.getHtmlContent();
 
+        // Re-send state when view becomes visible
+        webviewView.onDidChangeVisibility(() => {
+            if (webviewView.visible) {
+                this.updateView();
+            }
+        });
+
         // Handle messages from the webview
         webviewView.webview.onDidReceiveMessage(async (message) => {
             switch (message.command) {
-                case 'apply':
-                    await this.applyChanges();
+                case 'copy':
+                    this.copyChange(message.index);
                     break;
                 case 'discard':
                     this.discardChanges();
@@ -70,8 +61,8 @@ export class PendingChangesPanel implements vscode.WebviewViewProvider {
                 case 'remove':
                     this.removeChange(message.index);
                     break;
-                case 'goToLine':
-                    this.goToLine(message.line);
+                case 'goToOperator':
+                    this.goToOperator(message.operator);
                     break;
             }
         });
@@ -126,152 +117,77 @@ export class PendingChangesPanel implements vscode.WebviewViewProvider {
         this.updateView();
     }
 
-    private async goToLine(line: number) {
+    private async goToOperator(operatorName: string) {
         const chainFiles = await vscode.workspace.findFiles('**/chain.cpp', '**/build/**', 1);
         if (chainFiles.length === 0) {
             return;
         }
 
         const document = await vscode.workspace.openTextDocument(chainFiles[0]);
-        const editor = await vscode.window.showTextDocument(document);
+        const text = document.getText();
 
-        const position = new vscode.Position(line - 1, 0);
-        editor.selection = new vscode.Selection(position, position);
-        editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
-    }
+        // Find the chain.add line for this operator
+        const pattern = new RegExp(`chain\\.add<[^>]+>\\s*\\(\\s*["']${operatorName}["']`);
+        const match = pattern.exec(text);
 
-    private async applyChanges() {
-        const changesToApply = this.pendingChanges.filter((_, i) => !this.removedIndices.has(i));
-
-        if (changesToApply.length === 0) {
-            vscode.window.showWarningMessage('No changes to apply');
-            return;
-        }
-
-        // Find chain.cpp
-        const chainFiles = await vscode.workspace.findFiles('**/chain.cpp', '**/build/**', 1);
-        if (chainFiles.length === 0) {
-            vscode.window.showErrorMessage('Could not find chain.cpp in workspace');
-            return;
-        }
-
-        const chainUri = chainFiles[0];
-        const document = await vscode.workspace.openTextDocument(chainUri);
-        const source = document.getText();
-        const edit = new vscode.WorkspaceEdit();
-
-        let appliedCount = 0;
-        for (const change of changesToApply) {
-            const result = this.applyChange(document, source, edit, change);
-            if (result) {
-                appliedCount++;
-            }
-        }
-
-        if (appliedCount > 0) {
-            const success = await vscode.workspace.applyEdit(edit);
-            if (success) {
-                await document.save();
-                this.statusBarManager.sendCommitChanges();
-                this.outputChannel.appendLine(`[PendingChanges] Applied ${appliedCount} change(s)`);
-                vscode.window.showInformationMessage(`Applied ${appliedCount} change(s) to chain.cpp`);
-            } else {
-                vscode.window.showErrorMessage('Failed to apply changes');
-            }
-        } else {
-            vscode.window.showWarningMessage('No changes could be applied');
+        if (match) {
+            const position = document.positionAt(match.index);
+            const editor = await vscode.window.showTextDocument(document);
+            editor.selection = new vscode.Selection(position, position);
+            editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
         }
     }
 
-    private applyChange(document: vscode.TextDocument, source: string, edit: vscode.WorkspaceEdit, change: PendingChange): boolean {
-        const formattedValue = this.formatValue(change.newValue, change.paramType);
+    private copyChange(index: number) {
+        const change = this.pendingChanges[index];
+        if (!change) return;
 
-        // Try tree-sitter first
-        if (this.parserReady) {
-            const location = findParamValue(source, change.sourceLine, change.operator, change.param);
+        const formatted = this.formatValueForCode(change.newValue, change.paramType);
+        const code = this.buildCodeSnippet(change, formatted);
 
-            if (location) {
-                this.outputChannel.appendLine(
-                    `[PendingChanges] Found ${change.operator}.${change.param} at line ${change.sourceLine}: "${location.currentValue}" -> "${formattedValue}"`
-                );
-                applyParamChange(document, edit, location, formattedValue);
-                return true;
-            }
-        }
-
-        // Fallback to regex
-        return this.applyChangeRegex(document, edit, change, formattedValue);
+        vscode.env.clipboard.writeText(code);
+        vscode.window.showInformationMessage(`Copied: ${change.operator}.${change.param}`);
     }
 
-    private applyChangeRegex(document: vscode.TextDocument, edit: vscode.WorkspaceEdit, change: PendingChange, formattedValue: string): boolean {
-        const lineIndex = change.sourceLine - 1;
-        if (lineIndex < 0 || lineIndex >= document.lineCount) {
-            return false;
-        }
-
-        const line = document.lineAt(lineIndex);
-        const lineText = line.text;
-        let newLineText: string | null = null;
-
-        const propPattern = new RegExp(
-            `(${this.escapeRegex(change.operator)}\\.${this.escapeRegex(change.param)}\\s*=\\s*)([^;]+)(;)`
-        );
-        if (propPattern.test(lineText)) {
-            newLineText = lineText.replace(propPattern, `$1${formattedValue}$3`);
-        }
-
-        if (!newLineText) {
-            const methodPattern = new RegExp(
-                `(${this.escapeRegex(change.operator)}\\.${this.escapeRegex(change.param)}\\s*\\()([^)]+)(\\))`
-            );
-            if (methodPattern.test(lineText)) {
-                newLineText = lineText.replace(methodPattern, `$1${formattedValue}$3`);
+    private formatValueForCode(value: number[], paramType: string): string {
+        const fmt = (v: number) => {
+            const rounded = Math.round(v * 10000) / 10000;
+            if (Number.isInteger(rounded)) {
+                return `${rounded}.0f`;
             }
-        }
+            let str = rounded.toString();
+            if (!str.includes('.')) {
+                str += '.0';
+            }
+            return str + 'f';
+        };
 
-        if (newLineText && newLineText !== lineText) {
-            const range = new vscode.Range(lineIndex, 0, lineIndex, lineText.length);
-            edit.replace(document.uri, range, newLineText);
-            return true;
-        }
-
-        return false;
-    }
-
-    private formatValue(value: number[], paramType: string): string {
         switch (paramType) {
             case 'Float':
-                return this.formatFloat(value[0]);
+                return fmt(value[0]);
             case 'Int':
                 return Math.round(value[0]).toString();
             case 'Bool':
                 return value[0] !== 0 ? 'true' : 'false';
             case 'Vec2':
-                return `${this.formatFloat(value[0])}, ${this.formatFloat(value[1])}`;
+                return `${fmt(value[0])}, ${fmt(value[1])}`;
             case 'Vec3':
-                return `${this.formatFloat(value[0])}, ${this.formatFloat(value[1])}, ${this.formatFloat(value[2])}`;
+                return `${fmt(value[0])}, ${fmt(value[1])}, ${fmt(value[2])}`;
             case 'Vec4':
             case 'Color':
-                return `${this.formatFloat(value[0])}, ${this.formatFloat(value[1])}, ${this.formatFloat(value[2])}, ${this.formatFloat(value[3])}`;
+                return `${fmt(value[0])}, ${fmt(value[1])}, ${fmt(value[2])}, ${fmt(value[3])}`;
             default:
-                return this.formatFloat(value[0]);
+                return fmt(value[0]);
         }
     }
 
-    private formatFloat(value: number): string {
-        const rounded = Math.round(value * 10000) / 10000;
-        if (Number.isInteger(rounded)) {
-            return `${rounded}.0f`;
+    private buildCodeSnippet(change: PendingChange, formattedValue: string): string {
+        const isVectorType = ['Vec2', 'Vec3', 'Vec4', 'Color'].includes(change.paramType);
+        if (isVectorType) {
+            return `${change.operator}.${change.param}.set(${formattedValue});`;
+        } else {
+            return `${change.operator}.${change.param} = ${formattedValue};`;
         }
-        let str = rounded.toString();
-        if (!str.includes('.')) {
-            str += '.0';
-        }
-        return str + 'f';
-    }
-
-    private escapeRegex(str: string): string {
-        return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
     private discardChanges() {
@@ -302,6 +218,14 @@ export class PendingChangesPanel implements vscode.WebviewViewProvider {
             text-align: center;
             padding: 20px;
         }
+        .info-text {
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+            margin-bottom: 12px;
+            padding: 8px;
+            background: var(--vscode-textBlockQuote-background);
+            border-radius: 4px;
+        }
         .change-item {
             background: var(--vscode-editor-background);
             border: 1px solid var(--vscode-panel-border);
@@ -323,20 +247,30 @@ export class PendingChangesPanel implements vscode.WebviewViewProvider {
         .change-name:hover {
             text-decoration: underline;
         }
-        .remove-btn {
+        .change-buttons {
+            display: flex;
+            gap: 4px;
+        }
+        .icon-btn {
             background: none;
             border: none;
-            color: var(--vscode-errorForeground);
+            color: var(--vscode-foreground);
             cursor: pointer;
             padding: 2px 6px;
-            font-size: 14px;
+            font-size: 12px;
+            opacity: 0.7;
         }
-        .remove-btn:hover {
+        .icon-btn:hover {
+            opacity: 1;
             background: var(--vscode-toolbar-hoverBackground);
+        }
+        .remove-btn {
+            color: var(--vscode-errorForeground);
         }
         .change-values {
             font-size: 12px;
             color: var(--vscode-descriptionForeground);
+            font-family: var(--vscode-editor-font-family);
         }
         .old-value {
             color: var(--vscode-errorForeground);
@@ -355,31 +289,18 @@ export class PendingChangesPanel implements vscode.WebviewViewProvider {
             padding-top: 12px;
             border-top: 1px solid var(--vscode-panel-border);
         }
-        button {
+        button.discard-btn {
             flex: 1;
             padding: 6px 12px;
             border: none;
             border-radius: 4px;
             cursor: pointer;
             font-size: 13px;
-        }
-        .apply-btn {
-            background: var(--vscode-button-background);
-            color: var(--vscode-button-foreground);
-        }
-        .apply-btn:hover {
-            background: var(--vscode-button-hoverBackground);
-        }
-        .discard-btn {
             background: var(--vscode-button-secondaryBackground);
             color: var(--vscode-button-secondaryForeground);
         }
-        .discard-btn:hover {
+        button.discard-btn:hover {
             background: var(--vscode-button-secondaryHoverBackground);
-        }
-        .line-number {
-            font-size: 11px;
-            color: var(--vscode-descriptionForeground);
         }
     </style>
 </head>
@@ -388,10 +309,12 @@ export class PendingChangesPanel implements vscode.WebviewViewProvider {
         <div id="empty-state" class="empty-state">
             No pending changes
         </div>
+        <div id="info-text" class="info-text" style="display: none;">
+            Adjust parameters in the Inspector or runtime UI. Use Claude Code to apply changes to your code.
+        </div>
         <div id="changes-list"></div>
         <div id="actions" class="actions" style="display: none;">
-            <button class="apply-btn" onclick="apply()">Apply to Code</button>
-            <button class="discard-btn" onclick="discard()">Discard</button>
+            <button class="discard-btn" onclick="discard()">Discard All</button>
         </div>
     </div>
 
@@ -401,7 +324,7 @@ export class PendingChangesPanel implements vscode.WebviewViewProvider {
         function formatValue(value, paramType) {
             switch (paramType) {
                 case 'Float':
-                    return value[0].toFixed(2);
+                    return value[0].toFixed(3);
                 case 'Int':
                     return Math.round(value[0]).toString();
                 case 'Bool':
@@ -414,43 +337,48 @@ export class PendingChangesPanel implements vscode.WebviewViewProvider {
                 case 'Color':
                     return \`(\${value[0].toFixed(2)}, \${value[1].toFixed(2)}, \${value[2].toFixed(2)}, \${value[3].toFixed(2)})\`;
                 default:
-                    return value[0].toFixed(2);
+                    return value[0].toFixed(3);
             }
         }
 
         function renderChanges(changes) {
             const list = document.getElementById('changes-list');
             const emptyState = document.getElementById('empty-state');
+            const infoText = document.getElementById('info-text');
             const actions = document.getElementById('actions');
 
             if (changes.length === 0) {
                 list.innerHTML = '';
                 emptyState.style.display = 'block';
+                infoText.style.display = 'none';
                 actions.style.display = 'none';
                 return;
             }
 
             emptyState.style.display = 'none';
+            infoText.style.display = 'block';
             actions.style.display = 'flex';
 
             list.innerHTML = changes.map(change => \`
                 <div class="change-item">
                     <div class="change-header">
-                        <span class="change-name" onclick="goToLine(\${change.sourceLine})">\${change.operator}.\${change.param}</span>
-                        <button class="remove-btn" onclick="remove(\${change.index})">✕</button>
+                        <span class="change-name" onclick="goToOperator('\${change.operator}')">\${change.operator}.\${change.param}</span>
+                        <div class="change-buttons">
+                            <button class="icon-btn" onclick="copy(\${change.index})" title="Copy code snippet">copy</button>
+                            <button class="icon-btn remove-btn" onclick="remove(\${change.index})" title="Remove">✕</button>
+                        </div>
                     </div>
                     <div class="change-values">
                         <span class="old-value">\${formatValue(change.oldValue, change.paramType)}</span>
                         <span class="arrow">→</span>
                         <span class="new-value">\${formatValue(change.newValue, change.paramType)}</span>
                     </div>
-                    <div class="line-number">Line \${change.sourceLine}</div>
                 </div>
             \`).join('');
         }
 
-        function apply() {
-            vscode.postMessage({ command: 'apply' });
+        function copy(index) {
+            vscode.postMessage({ command: 'copy', index: index });
         }
 
         function discard() {
@@ -461,8 +389,8 @@ export class PendingChangesPanel implements vscode.WebviewViewProvider {
             vscode.postMessage({ command: 'remove', index: index });
         }
 
-        function goToLine(line) {
-            vscode.postMessage({ command: 'goToLine', line: line });
+        function goToOperator(operator) {
+            vscode.postMessage({ command: 'goToOperator', operator: operator });
         }
 
         window.addEventListener('message', event => {

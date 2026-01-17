@@ -23,6 +23,7 @@ import { DiagnosticsManager } from './diagnostics';
 import { CompletionProvider } from './completion';
 import { PendingChangesPanel } from './pendingChangesPanel';
 import { ChainGraphPanel } from './chainGraphPanel';
+import { ParamInspectorPanel } from './paramInspectorPanel';
 
 /**
  * Find a Vivid project path from context:
@@ -94,6 +95,7 @@ let operatorLibraryPanel: OperatorLibraryPanel;
 let statusBarManager: StatusBarManager;
 let diagnosticsManager: DiagnosticsManager;
 let pendingChangesPanel: PendingChangesPanel;
+let paramInspectorPanel: ParamInspectorPanel;
 
 export function activate(context: vscode.ExtensionContext) {
     outputChannel = vscode.window.createOutputChannel('Vivid');
@@ -146,6 +148,20 @@ export function activate(context: vscode.ExtensionContext) {
         )
     );
     context.subscriptions.push(pendingChangesPanel);
+
+    // Initialize parameter inspector panel
+    paramInspectorPanel = new ParamInspectorPanel(
+        context.extensionUri,
+        statusBarManager,
+        outputChannel
+    );
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(
+            ParamInspectorPanel.viewType,
+            paramInspectorPanel
+        )
+    );
+    context.subscriptions.push(paramInspectorPanel);
 
     // Register completion provider for C++ files
     const completionProvider = new CompletionProvider(operatorCatalog);

@@ -99,6 +99,11 @@
       "vivid": [
         {
           "type": "webview",
+          "id": "vividParamInspector",
+          "name": "Inspector"
+        },
+        {
+          "type": "webview",
           "id": "vividPendingChanges",
           "name": "Pending Changes"
         },
@@ -115,7 +120,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
-    "esbuild-base": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --external:web-tree-sitter --format=cjs --platform=node",
+    "esbuild-base": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",
     "esbuild": "npm run esbuild-base -- --sourcemap",
     "esbuild-watch": "npm run esbuild-base -- --sourcemap --watch",
     "package": "vsce package",
@@ -135,7 +140,6 @@
   "dependencies": {
     "comment-parser": "^1.4.1",
     "elkjs": "^0.9.3",
-    "web-tree-sitter": "^0.24.0",
     "ws": "^8.16.0"
   }
 }
