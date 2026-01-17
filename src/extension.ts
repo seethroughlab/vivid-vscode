@@ -22,6 +22,7 @@ import { StatusBarManager } from './statusBar';
 import { DiagnosticsManager } from './diagnostics';
 import { CompletionProvider } from './completion';
 import { PendingChangesPanel } from './pendingChangesPanel';
+import { ChainGraphPanel } from './chainGraphPanel';
 
 /**
  * Find a Vivid project path from context:
@@ -96,7 +97,11 @@ let pendingChangesPanel: PendingChangesPanel;
 
 export function activate(context: vscode.ExtensionContext) {
     outputChannel = vscode.window.createOutputChannel('Vivid');
+    outputChannel.appendLine('[Vivid] Extension activating...');
+
+    try {
     runtimeManager = new RuntimeManager(outputChannel);
+    outputChannel.appendLine('[Vivid] RuntimeManager created');
 
     // Check vividRoot setting
     const config = vscode.workspace.getConfiguration('vivid');
@@ -119,8 +124,11 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     // Initialize status bar and diagnostics
+    outputChannel.appendLine('[Vivid] Creating StatusBarManager...');
     statusBarManager = new StatusBarManager(outputChannel);
+    outputChannel.appendLine('[Vivid] StatusBarManager created');
     diagnosticsManager = new DiagnosticsManager(statusBarManager);
+    outputChannel.appendLine('[Vivid] DiagnosticsManager created');
     context.subscriptions.push(statusBarManager);
     context.subscriptions.push(diagnosticsManager);
 
@@ -577,6 +585,10 @@ export function activate(context: vscode.ExtensionContext) {
                     });
                 });
             });
+        }),
+
+        vscode.commands.registerCommand('vivid.showChainGraph', () => {
+            ChainGraphPanel.createOrShow(context.extensionUri, statusBarManager);
         })
     );
 
@@ -652,7 +664,11 @@ export function activate(context: vscode.ExtensionContext) {
         handleClaudeCodeSetup(runtimeManager.executablePath, outputChannel);
     }
 
-    outputChannel.appendLine('Vivid extension activated');
+    outputChannel.appendLine('[Vivid] Extension activated successfully');
+    } catch (e) {
+        outputChannel.appendLine(`[Vivid] ERROR during activation: ${e}`);
+        console.error('[Vivid] Activation error:', e);
+    }
 }
 
 export function deactivate() {

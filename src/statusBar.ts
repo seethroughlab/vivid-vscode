@@ -26,15 +26,45 @@ export interface PendingChange {
     timestamp: number;
 }
 
+export interface ChainOperator {
+    name: string;
+    displayName: string;
+    outputType: string;
+    inputs: string[];
+}
+
+export interface SoloState {
+    active: boolean;
+    operatorName: string;
+}
+
+export interface ParamInfo {
+    operator: string;
+    name: string;
+    type: string;
+    value: number[];
+    min: number;
+    max: number;
+    stringValue?: string;
+    fileFilter?: string;
+    fileCategory?: string;
+}
+
 export interface VividState {
     connected: boolean;
     compileStatus: CompileStatus | null;
     operators: any[];
     pendingChanges: PendingChange[];
     projectPath?: string;
+    chainStructure: ChainOperator[];
+    soloState: SoloState;
+    params: ParamInfo[];
 }
 
 type StateChangeCallback = (state: VividState) => void;
+type ChainStructureCallback = (operators: ChainOperator[]) => void;
+type SoloStateCallback = (active: boolean, operatorName: string) => void;
+type ParamCallback = (params: ParamInfo[]) => void;
 
 export class StatusBarManager {
     private statusBarItem: vscode.StatusBarItem;
@@ -46,8 +76,14 @@ export class StatusBarManager {
         connected: false,
         compileStatus: null,
         operators: [],
-        pendingChanges: []
+        pendingChanges: [],
+        chainStructure: [],
+        soloState: { active: false, operatorName: '' },
+        params: []
     };
+    private chainStructureCallbacks: ChainStructureCallback[] = [];
+    private soloStateCallbacks: SoloStateCallback[] = [];
+    private paramCallbacks: ParamCallback[] = [];
     private mcpStatus: McpEnabledStatus = {
         configured: false,
         enabled: false
@@ -125,6 +161,7 @@ export class StatusBarManager {
                 this.send({ type: 'request_operators' });
                 this.send({ type: 'request_compile_status' });
                 this.send({ type: 'request_pending_changes' });
+                this.send({ type: 'request_chain_structure' });
             });
 
             this.ws.on('message', (data: WebSocket.Data) => {
@@ -142,6 +179,9 @@ export class StatusBarManager {
                 this.state.compileStatus = null;
                 this.state.operators = [];
                 this.state.pendingChanges = [];
+                this.state.chainStructure = [];
+                this.state.soloState = { active: false, operatorName: '' };
+                this.state.params = [];
                 this.updateStatusBar();
                 this.notifyStateChange();
                 this.scheduleReconnect();
@@ -159,10 +199,71 @@ export class StatusBarManager {
         }
     }
 
-    private send(message: object) {
+    // Public send method for external components (e.g., ChainGraphPanel)
+    send(message: object) {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(message));
         }
+    }
+
+    // Register callback for chain structure updates
+    onChainStructure(callback: ChainStructureCallback): vscode.Disposable {
+        this.chainStructureCallbacks.push(callback);
+        // If we already have chain structure, call immediately
+        if (this.state.chainStructure.length > 0) {
+            callback(this.state.chainStructure);
+        }
+        return {
+            dispose: () => {
+                const index = this.chainStructureCallbacks.indexOf(callback);
+                if (index > -1) {
+                    this.chainStructureCallbacks.splice(index, 1);
+                }
+            }
+        };
+    }
+
+    // Register callback for solo state updates
+    onSoloState(callback: SoloStateCallback): vscode.Disposable {
+        this.soloStateCallbacks.push(callback);
+        // Call immediately with current state
+        callback(this.state.soloState.active, this.state.soloState.operatorName);
+        return {
+            dispose: () => {
+                const index = this.soloStateCallbacks.indexOf(callback);
+                if (index > -1) {
+                    this.soloStateCallbacks.splice(index, 1);
+                }
+            }
+        };
+    }
+
+    // Register callback for param updates
+    onParams(callback: ParamCallback): vscode.Disposable {
+        this.paramCallbacks.push(callback);
+        // Call immediately with current params
+        if (this.state.params.length > 0) {
+            callback(this.state.params);
+        }
+        return {
+            dispose: () => {
+                const index = this.paramCallbacks.indexOf(callback);
+                if (index > -1) {
+                    this.paramCallbacks.splice(index, 1);
+                }
+            }
+        };
+    }
+
+    // Set a parameter value immediately (sends to Vivid runtime)
+    setParamImmediate(operator: string, param: string, value: number | number[]) {
+        const valueArray = Array.isArray(value) ? value : [value];
+        this.send({
+            type: 'set_param_immediate',
+            operator,
+            param,
+            value: valueArray
+        });
     }
 
     private handleMessage(message: any) {
@@ -195,8 +296,46 @@ export class StatusBarManager {
                 this.notifyStateChange();
                 break;
 
+            case 'chain_structure':
+                this.state.chainStructure = (message.operators || []).map((op: any) => ({
+                    name: op.name || '',
+                    displayName: op.displayName || '',
+                    outputType: op.outputType || '',
+                    inputs: op.inputs || []
+                }));
+                this.notifyStateChange();
+                for (const callback of this.chainStructureCallbacks) {
+                    callback(this.state.chainStructure);
+                }
+                break;
+
+            case 'solo_state':
+                this.state.soloState = {
+                    active: message.active || false,
+                    operatorName: message.operatorName || ''
+                };
+                this.notifyStateChange();
+                for (const callback of this.soloStateCallbacks) {
+                    callback(this.state.soloState.active, this.state.soloState.operatorName);
+                }
+                break;
+
             case 'param_values':
-                // Could be used for other features
+                this.state.params = (message.params || []).map((p: any) => ({
+                    operator: p.operator || '',
+                    name: p.name || '',
+                    type: p.type || 'Float',
+                    value: p.value || [0, 0, 0, 0],
+                    min: p.min ?? 0,
+                    max: p.max ?? 1,
+                    stringValue: p.stringValue,
+                    fileFilter: p.fileFilter,
+                    fileCategory: p.fileCategory
+                }));
+                this.notifyStateChange();
+                for (const callback of this.paramCallbacks) {
+                    callback(this.state.params);
+                }
                 break;
         }
     }
